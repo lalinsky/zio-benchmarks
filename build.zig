@@ -10,42 +10,32 @@ pub fn build(b: *std.Build) void {
     });
     const zio = zio_dep.module("zio");
 
-    const exe = b.addExecutable(.{
-        .name = "hostname_lookup",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/hostname_lookup.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "zio", .module = zio },
-            },
-        }),
-    });
-    b.installArtifact(exe);
+    const benchmarks = [_][]const u8{
+        "hostname_lookup",
+        "short_sleep",
+        "long_sleep",
+        "queue_ping_pong",
+        "tcp_ping_pong",
+    };
 
-    const short_sleep = b.addExecutable(.{
-        .name = "short_sleep",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/short_sleep.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "zio", .module = zio },
-            },
-        }),
-    });
-    b.installArtifact(short_sleep);
+    for (benchmarks) |name| {
+        const exe = b.addExecutable(.{
+            .name = name,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(b.fmt("src/{s}.zig", .{name})),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "zio", .module = zio },
+                },
+            }),
+        });
+        b.installArtifact(exe);
 
-    const long_sleep = b.addExecutable(.{
-        .name = "long_sleep",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/long_sleep.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "zio", .module = zio },
-            },
-        }),
-    });
-    b.installArtifact(long_sleep);
+        const go_cmd = b.addSystemCommand(&.{ "go", "build", "-o" });
+        go_cmd.setCwd(b.path("go"));
+        const go_out = go_cmd.addOutputFileArg(b.fmt("{s}_go", .{name}));
+        go_cmd.addArg(b.fmt("./{s}", .{name}));
+        b.getInstallStep().dependOn(&b.addInstallFile(go_out, b.fmt("bin/{s}_go", .{name})).step);
+    }
 }

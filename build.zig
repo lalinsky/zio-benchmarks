@@ -18,19 +18,14 @@ pub fn build(b: *std.Build) void {
         "tcp_ping_pong",
     };
 
+    // Zig-only benchmarks that use zio's native API and have no Go / std.Io
+    // counterpart. They only build a zig executable (no matching _go binary).
+    const zig_only_benchmarks = [_][]const u8{
+        "queue_ping_pong_native",
+    };
+
     for (benchmarks) |name| {
-        const exe = b.addExecutable(.{
-            .name = name,
-            .root_module = b.createModule(.{
-                .root_source_file = b.path(b.fmt("src/{s}.zig", .{name})),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "zio", .module = zio },
-                },
-            }),
-        });
-        b.installArtifact(exe);
+        addZigBenchmark(b, target, optimize, zio, name);
 
         const go_cmd = b.addSystemCommand(&.{ "go", "build", "-o" });
         go_cmd.setCwd(b.path("go"));
@@ -38,4 +33,29 @@ pub fn build(b: *std.Build) void {
         go_cmd.addArg(b.fmt("./{s}", .{name}));
         b.getInstallStep().dependOn(&b.addInstallFile(go_out, b.fmt("bin/{s}_go", .{name})).step);
     }
+
+    for (zig_only_benchmarks) |name| {
+        addZigBenchmark(b, target, optimize, zio, name);
+    }
+}
+
+fn addZigBenchmark(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zio: *std.Build.Module,
+    name: []const u8,
+) void {
+    const exe = b.addExecutable(.{
+        .name = name,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(b.fmt("src/{s}.zig", .{name})),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zio", .module = zio },
+            },
+        }),
+    });
+    b.installArtifact(exe);
 }

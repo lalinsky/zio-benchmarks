@@ -16,6 +16,8 @@ pub fn build(b: *std.Build) void {
         "long_sleep",
         "queue_ping_pong",
         "tcp_ping_pong",
+        "tcp_echo",
+        "queue_fan_in",
     };
 
     // Zig-only benchmarks that use zio's native API and have no Go / std.Io
@@ -24,8 +26,6 @@ pub fn build(b: *std.Build) void {
         "queue_ping_pong_native",
         "task_chain",
         "spawn_tree",
-        "tcp_echo",
-        "queue_fan_in",
     };
 
     for (benchmarks) |name| {

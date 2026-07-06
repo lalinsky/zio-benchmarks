@@ -18,6 +18,7 @@ pub fn build(b: *std.Build) void {
         "tcp_ping_pong",
         "tcp_echo",
         "queue_fan_in",
+        "cpu_parallel",
     };
 
     // Zig-only benchmarks that use zio's native API and have no Go / std.Io

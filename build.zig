@@ -24,6 +24,8 @@ pub fn build(b: *std.Build) void {
         "queue_ping_pong_native",
         "task_chain",
         "spawn_tree",
+        "tcp_echo",
+        "queue_fan_in",
     };
 
     for (benchmarks) |name| {

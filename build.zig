@@ -27,6 +27,7 @@ pub fn build(b: *std.Build) void {
         "queue_ping_pong_native",
         "task_chain",
         "spawn_tree",
+        "fanout_cpu",
     };
 
     for (benchmarks) |name| {

@@ -21,6 +21,7 @@ Available benchmarks:
 - `tcp_ping_pong` — 100,000 messages ping-ponged between two tasks over a loopback TCP connection
 - `tcp_echo` — many-connection echo throughput: thousands of concurrent loopback connections doing request/response round-trips
 - `queue_fan_in` — 1,000 producers pushing 100 items each into one queue drained by a single consumer (channel contention)
+- `worker_pool` — configurable producers/consumers sharing one queue; defaults to 1 producer pushing 100,000 items drained by 1,000 consumers doing minimal work per item (`--num-items`, `--num-producers`, `--num-consumers`, `--work`)
 - `cpu_parallel` — CPU-bound parallel reduction split into one task per chunk, no I/O (raw parallel compute throughput)
 
 Zig-only benchmarks (no Go counterpart, so `run.sh` doesn't apply; run the binaries directly with `--zio` / `--zio-mt`):

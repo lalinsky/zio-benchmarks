@@ -18,6 +18,7 @@ pub fn build(b: *std.Build) void {
         "tcp_ping_pong",
         "tcp_echo",
         "queue_fan_in",
+        "worker_pool",
         "cpu_parallel",
     };
 

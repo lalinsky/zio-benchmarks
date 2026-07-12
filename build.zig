@@ -25,6 +25,7 @@ pub fn build(b: *std.Build) void {
     // counterpart. They only build a zig executable (no matching _go binary).
     const zig_only_benchmarks = [_][]const u8{
         "queue_ping_pong_native",
+        "queue_ping_pong_futex",
         "task_chain",
         "spawn_tree",
         "fanout_cpu",

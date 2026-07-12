@@ -29,6 +29,7 @@ pub fn build(b: *std.Build) void {
         "task_chain",
         "spawn_tree",
         "fanout_cpu",
+        "zio_echo_server",
     };
 
     for (benchmarks) |name| {

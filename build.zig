@@ -10,6 +10,12 @@ pub fn build(b: *std.Build) void {
     });
     const zio = zio_dep.module("zio");
 
+    const xsync_dep = b.dependency("xsync", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const xsync = xsync_dep.module("xsync");
+
     const benchmarks = [_][]const u8{
         "hostname_lookup",
         "short_sleep",
@@ -45,6 +51,31 @@ pub fn build(b: *std.Build) void {
 
     for (zig_only_benchmarks) |name| {
         addZigBenchmark(b, target, optimize, zio, name);
+    }
+
+    // Variants that swap std.Io.Queue for xsync.Queue (same generic queue,
+    // built on xsync's cross-Io Mutex/Condition instead of std's).
+    const xsync_benchmarks = [_][]const u8{
+        "queue_ping_pong_xsync",
+        "mutex_bench",
+        "condition_bench",
+        "queue_fan_in_xsync",
+        "worker_pool_xsync",
+    };
+    for (xsync_benchmarks) |name| {
+        const exe = b.addExecutable(.{
+            .name = name,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(b.fmt("src/{s}.zig", .{name})),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "zio", .module = zio },
+                    .{ .name = "xsync", .module = xsync },
+                },
+            }),
+        });
+        b.installArtifact(exe);
     }
 }
 

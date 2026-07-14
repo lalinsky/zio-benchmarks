@@ -35,6 +35,9 @@
         .zio = .{
             .path = "../zio",
         },
+        .xsync = .{
+            .path = "../xsync",
+        },
     },
     .paths = .{
         "build.zig",

@@ -3,7 +3,8 @@
 # TCP benchmarks live in tcp_bench.sh (separate driver process + core pinning).
 #
 # Build first:
-#   zig build -Doptimize=ReleaseFast          (zig + go binaries)
+#   zig build -Doptimize=ReleaseFast          (zig binaries)
+#   ./build_go.sh                             (go counterparts)
 #   (cd rust && cargo build --release)        (tokio)
 #   (cd cpp && ./build.sh <asio> <photon>)    (asio + photon, see cpp/README.md)
 #
@@ -57,12 +58,19 @@ while [ $i -lt "$N" ]; do
     run "tokio        " $R/worker_pool $FI
     run "photon       " cpp/worker_pool_photon $FI
 
-    section "short_sleep: 10k tasks x 1ms (round $((i + 1)))"
-    run "zio-st       " $B/short_sleep --zio
-    run "zio-mt       " $B/short_sleep --zio-mt
-    run "go           " $B/short_sleep_go
-    run "tokio        " $R/short_sleep
-    run "photon       " cpp/short_sleep_photon
+    section "sleep: 10k tasks x 1ms (round $((i + 1)))"
+    run "zio-st       " $B/sleep_bench --zio
+    run "zio-mt       " $B/sleep_bench --zio-mt
+    run "go           " $B/sleep_bench_go
+    run "tokio        " $R/sleep_bench
+    run "photon       " cpp/sleep_bench_photon
+
+    section "spawn (sleep-0): 10k no-op tasks (round $((i + 1)))"
+    run "zio-st       " $B/sleep_bench --zio --sleep-ms=0
+    run "zio-mt       " $B/sleep_bench --zio-mt --sleep-ms=0
+    run "go           " $B/sleep_bench_go -sleep-ms=0
+    run "tokio        " $R/sleep_bench --sleep-ms=0
+    run "photon       " cpp/sleep_bench_photon --sleep-ms=0
 
     i=$((i + 1))
 done

@@ -12,8 +12,9 @@ API (`*_native`).
 ## Building
 
 ```
-zig build -Doptimize=ReleaseFast               # zig + go binaries
+zig build -Doptimize=ReleaseFast               # zig binaries
 zig build -Doptimize=ReleaseFast -Dbench=NAME  # just one benchmark
+./build_go.sh                                  # go counterparts
 (cd rust && cargo build --release)             # tokio counterparts
 (cd cpp && ./build.sh <asio> <photon>)         # asio + photon, see cpp/README.md
 ```
@@ -33,7 +34,9 @@ implementations and stable parameters:
   order-independent checksum verifies all runtimes agree. Presets: defaults
   (1 → 1000 fan-out), `--num-producers=1000 --num-consumers=1 --work=0`
   (fan-in)
-- **short_sleep** — 10k concurrent 1ms sleeps: spawn storm + timer pressure
+- **sleep_bench** — `--tasks` concurrent tasks each sleeping `--sleep-ms`.
+  Presets: defaults (10k × 1ms, spawn storm + timer pressure),
+  `--sleep-ms=0` (pure no-op spawn benchmark)
 
 `./golden.sh` runs the in-process golden set interleaved across every runtime
 that is built (`N=5 ./golden.sh` for more rounds).
@@ -61,8 +64,7 @@ three modes: `echo` (write back whatever arrives), `sink` (read and discard),
 
 ## Secondary benchmarks
 
-With Go counterparts (`./run.sh NAME` compares all backends):
-`hostname_lookup`, `short_sleep`, `long_sleep`, `cpu_parallel`.
+With a Go counterpart (`./run.sh NAME` compares all backends): `cpu_parallel`.
 
 Zig-only (run directly with `--zio` / `--zio-mt`):
 

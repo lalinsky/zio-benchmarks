@@ -3,4 +3,4 @@ queue_ping_pong_photon
 tcp_server_asio
 tcp_server_photon
 worker_pool_photon
-short_sleep_photon
+sleep_bench_photon

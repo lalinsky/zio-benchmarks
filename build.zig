@@ -17,19 +17,13 @@ pub fn build(b: *std.Build) void {
     });
     const xsync = xsync_dep.module("xsync");
 
+    // Go counterparts build separately with ./build_go.sh.
     const benchmarks = [_][]const u8{
-        "hostname_lookup",
-        "short_sleep",
-        "long_sleep",
+        "sleep_bench",
         "queue_ping_pong",
         "tcp_server",
         "worker_pool",
         "cpu_parallel",
-    };
-
-    // Zig-only benchmarks that use zio's native API and have no Go / std.Io
-    // counterpart. They only build a zig executable (no matching _go binary).
-    const zig_only_benchmarks = [_][]const u8{
         "queue_ping_pong_native",
         "queue_ping_pong_futex",
         "task_chain",
@@ -44,20 +38,6 @@ pub fn build(b: *std.Build) void {
     };
 
     for (benchmarks) |name| {
-        if (only) |o| if (!std.mem.eql(u8, name, o)) continue;
-        addZigBenchmark(b, target, optimize, zio, name);
-
-        const go_cmd = b.addSystemCommand(&.{ "go", "build", "-o" });
-        go_cmd.setCwd(b.path("go"));
-        // zig can't track go sources as inputs, so always rerun (go's own
-        // build cache makes this cheap).
-        go_cmd.has_side_effects = true;
-        const go_out = go_cmd.addOutputFileArg(b.fmt("{s}_go", .{name}));
-        go_cmd.addArg(b.fmt("./{s}", .{name}));
-        b.getInstallStep().dependOn(&b.addInstallFile(go_out, b.fmt("bin/{s}_go", .{name})).step);
-    }
-
-    for (zig_only_benchmarks) |name| {
         if (only) |o| if (!std.mem.eql(u8, name, o)) continue;
         addZigBenchmark(b, target, optimize, zio, name);
     }

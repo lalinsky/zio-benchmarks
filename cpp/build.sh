@@ -20,6 +20,6 @@ for f in queue_ping_pong; do
 done
 g++ -std=c++20 -O2 -I"$ASIO/asio/include" -o tcp_server_asio tcp_server_asio.cpp -lpthread
 
-for f in queue_ping_pong_photon tcp_server_photon worker_pool_photon short_sleep_photon; do
+for f in queue_ping_pong_photon tcp_server_photon worker_pool_photon sleep_bench_photon; do
     g++ -std=c++17 -O2 -I"$PHOTON/include" -o $f $f.cpp $PHOTON_LIBS -lpthread -ldl -lz
 done

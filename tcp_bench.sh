@@ -5,7 +5,8 @@
 # comparison.
 #
 # Build first:
-#   zig build -Doptimize=ReleaseFast          (zig + go servers)
+#   zig build -Doptimize=ReleaseFast          (zig servers)
+#   ./build_go.sh                             (go server)
 #   (cd rust && cargo build --release)        (tokio server)
 #   (cd cpp && ./build.sh <asio> <photon>)    (asio + photon servers)
 #

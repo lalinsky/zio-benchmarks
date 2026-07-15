@@ -24,16 +24,33 @@ fn threadWorker(m: *zio.Mutex, counter: *u64) void {
     }
 }
 
+fn osThreadWorker(m: *zio.os.thread.Mutex, counter: *u64) void {
+    for (0..iterations) |_| {
+        m.lock();
+        counter.* += 1;
+        m.unlock();
+    }
+}
+
 pub fn main(init: std.process.Init.Minimal) !void {
     const gpa = std.heap.smp_allocator;
 
     var mt = false;
     var threads = false;
+    var os_mutex = false;
+    var workers: usize = num_workers;
     var exact: ?u8 = null;
     var iter = init.args.iterate();
     while (iter.next()) |arg| {
         if (std.mem.eql(u8, arg, "--zio-mt")) mt = true;
         if (std.mem.eql(u8, arg, "--threads")) threads = true;
+        if (std.mem.eql(u8, arg, "--os")) {
+            os_mutex = true;
+            threads = true;
+        }
+        if (std.mem.startsWith(u8, arg, "--workers=")) {
+            workers = std.fmt.parseInt(usize, arg["--workers=".len..], 10) catch num_workers;
+        }
         if (std.mem.startsWith(u8, arg, "--exact=")) {
             exact = std.fmt.parseInt(u8, arg["--exact=".len..], 10) catch null;
             mt = true;
@@ -45,10 +62,15 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
     const start = zio.Timestamp.now(.monotonic);
 
-    if (threads) {
-        var handles: [num_workers]std.Thread = undefined;
-        for (&handles) |*h| h.* = try std.Thread.spawn(.{}, threadWorker, .{ &m, &counter });
-        for (handles) |h| h.join();
+    if (os_mutex) {
+        var om: zio.os.thread.Mutex = .init();
+        var handles: [16]std.Thread = undefined;
+        for (handles[0..workers]) |*h| h.* = try std.Thread.spawn(.{}, osThreadWorker, .{ &om, &counter });
+        for (handles[0..workers]) |h| h.join();
+    } else if (threads) {
+        var handles: [16]std.Thread = undefined;
+        for (handles[0..workers]) |*h| h.* = try std.Thread.spawn(.{}, threadWorker, .{ &m, &counter });
+        for (handles[0..workers]) |h| h.join();
     } else {
         const opts: zio.RuntimeOptions = if (exact) |n| .{ .executors = .exact(n) } else if (mt) .{ .executors = .auto } else .{};
         const rt = try zio.Runtime.init(gpa, opts);
@@ -61,7 +83,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     }
 
     const ns: u64 = @intCast(start.durationTo(zio.Timestamp.now(.monotonic)).toNanoseconds());
-    if (counter != num_workers * iterations) return error.BadCount;
-    const mode = if (threads) "threads" else if (mt) "zio-mt" else "zio";
+    if (counter != workers * iterations) return error.BadCount;
+    const mode = if (os_mutex) "os" else if (threads) "threads" else if (mt) "zio-mt" else "zio";
     std.log.info("Duration: {d:.3}ms ({s}, {d} locks, {d} locks/s)", .{ @as(f64, @floatFromInt(ns)) / 1e6, mode, counter, counter * 1_000_000_000 / ns });
 }

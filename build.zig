@@ -37,6 +37,8 @@ pub fn build(b: *std.Build) void {
         "spawn_tree",
         "fanout_cpu",
         "zio_echo_server",
+        "condition_bench_native",
+        "rwlock_bench_native",
     };
 
     for (benchmarks) |name| {

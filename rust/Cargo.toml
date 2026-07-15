@@ -1,0 +1,11 @@
+[package]
+name = "zio-benchmarks-rust"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "io-util"] }
+async-channel = "2"
+
+[profile.release]
+opt-level = 3

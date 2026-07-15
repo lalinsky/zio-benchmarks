@@ -3,6 +3,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const only = b.option([]const u8, "bench", "Build only the named benchmark");
 
     const zio_dep = b.dependency("zio", .{
         .target = target,
@@ -21,9 +22,7 @@ pub fn build(b: *std.Build) void {
         "short_sleep",
         "long_sleep",
         "queue_ping_pong",
-        "tcp_ping_pong",
         "tcp_echo",
-        "queue_fan_in",
         "worker_pool",
         "cpu_parallel",
     };
@@ -39,19 +38,28 @@ pub fn build(b: *std.Build) void {
         "zio_echo_server",
         "condition_bench_native",
         "rwlock_bench_native",
+        "worker_pool_native",
+        "yield_bench",
+        "spawn_bench",
+        "tcp_echo_native",
     };
 
     for (benchmarks) |name| {
+        if (only) |o| if (!std.mem.eql(u8, name, o)) continue;
         addZigBenchmark(b, target, optimize, zio, name);
 
         const go_cmd = b.addSystemCommand(&.{ "go", "build", "-o" });
         go_cmd.setCwd(b.path("go"));
+        // zig can't track go sources as inputs, so always rerun (go's own
+        // build cache makes this cheap).
+        go_cmd.has_side_effects = true;
         const go_out = go_cmd.addOutputFileArg(b.fmt("{s}_go", .{name}));
         go_cmd.addArg(b.fmt("./{s}", .{name}));
         b.getInstallStep().dependOn(&b.addInstallFile(go_out, b.fmt("bin/{s}_go", .{name})).step);
     }
 
     for (zig_only_benchmarks) |name| {
+        if (only) |o| if (!std.mem.eql(u8, name, o)) continue;
         addZigBenchmark(b, target, optimize, zio, name);
     }
 
@@ -62,10 +70,10 @@ pub fn build(b: *std.Build) void {
         "mutex_bench",
         "condition_bench",
         "mutex_bench_native",
-        "queue_fan_in_xsync",
         "worker_pool_xsync",
     };
     for (xsync_benchmarks) |name| {
+        if (only) |o| if (!std.mem.eql(u8, name, o)) continue;
         const exe = b.addExecutable(.{
             .name = name,
             .root_module = b.createModule(.{

@@ -1,16 +1,26 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"net"
 	"sync"
 	"time"
 )
 
-const numConns = 1000
-const msgsPerConn = 100
-const msgSize = 64
+// Golden TCP benchmark: -conns concurrent loopback connections, each doing
+// -msgs request/response round-trips of -size bytes against a per-connection
+// echo handler. Presets:
+//
+//	defaults (1000 conns x 100 msgs x 64B)  many-connection throughput
+//	-conns=1 -msgs=100000 -size=4096        single-connection latency chain
 const port = ":18766"
+
+var (
+	numConns    = flag.Int("conns", 1000, "concurrent connections")
+	msgsPerConn = flag.Int("msgs", 100, "round-trips per connection")
+	msgSize     = flag.Int("size", 64, "message size in bytes")
+)
 
 func readFull(conn net.Conn, buf []byte) error {
 	for len(buf) > 0 {
@@ -25,7 +35,7 @@ func readFull(conn net.Conn, buf []byte) error {
 
 func echoHandler(conn net.Conn) {
 	defer conn.Close()
-	msg := make([]byte, msgSize)
+	msg := make([]byte, *msgSize)
 	for {
 		if err := readFull(conn, msg); err != nil {
 			return
@@ -48,7 +58,7 @@ func server(ready chan struct{}) {
 	close(ready)
 
 	var handlers sync.WaitGroup
-	for i := 0; i < numConns; i++ {
+	for i := 0; i < *numConns; i++ {
 		conn, err := ln.Accept()
 		if err != nil {
 			fmt.Printf("server: accept failed: %v\n", err)
@@ -70,8 +80,8 @@ func client(ready chan struct{}) {
 	}
 	defer conn.Close()
 
-	msg := make([]byte, msgSize)
-	for i := 0; i < msgsPerConn; i++ {
+	msg := make([]byte, *msgSize)
+	for i := 0; i < *msgsPerConn; i++ {
 		if _, err := conn.Write(msg); err != nil {
 			return
 		}
@@ -82,6 +92,8 @@ func client(ready chan struct{}) {
 }
 
 func main() {
+	flag.Parse()
+
 	ready := make(chan struct{})
 
 	start := time.Now()
@@ -90,7 +102,7 @@ func main() {
 	go func() { defer close(serverDone); server(ready) }()
 
 	var clients sync.WaitGroup
-	for i := 0; i < numConns; i++ {
+	for i := 0; i < *numConns; i++ {
 		clients.Add(1)
 		go func() { defer clients.Done(); client(ready) }()
 	}
@@ -98,7 +110,7 @@ func main() {
 	<-serverDone
 
 	dur := time.Since(start)
-	totalMsgs := numConns * msgsPerConn
+	totalMsgs := *numConns * *msgsPerConn
 	rate := int64(float64(totalMsgs) / dur.Seconds())
-	fmt.Printf("Duration: %v (%d msgs over %d conns, %d msgs/s)\n", dur, totalMsgs, numConns, rate)
+	fmt.Printf("Duration: %v (%d msgs over %d conns, size %d, %d msgs/s)\n", dur, totalMsgs, *numConns, *msgSize, rate)
 }

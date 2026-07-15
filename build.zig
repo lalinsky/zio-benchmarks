@@ -59,6 +59,7 @@ pub fn build(b: *std.Build) void {
         "queue_ping_pong_xsync",
         "mutex_bench",
         "condition_bench",
+        "mutex_bench_native",
         "queue_fan_in_xsync",
         "worker_pool_xsync",
     };

@@ -1,5 +1,6 @@
 #!/bin/sh
-# Run the golden benchmarks across all runtimes, interleaved.
+# Run the in-process golden benchmarks across all runtimes, interleaved.
+# TCP benchmarks live in tcp_bench.sh (separate driver process + core pinning).
 #
 # Build first:
 #   zig build -Doptimize=ReleaseFast          (zig + go binaries)
@@ -27,26 +28,6 @@ section() {
 
 i=0
 while [ $i -lt "$N" ]; do
-    section "tcp_echo: 1000 conns x 100 msgs x 64B (round $((i + 1)))"
-    run "zio-st-stdio " $B/tcp_echo --zio
-    run "zio-mt-stdio " $B/tcp_echo --zio-mt
-    run "zio-st-native" $B/tcp_echo_native --zio
-    run "zio-mt-native" $B/tcp_echo_native --zio-mt
-    run "go           " $B/tcp_echo_go
-    run "tokio        " $R/tcp_echo
-    run "asio         " cpp/tcp_echo_asio
-    run "photon       " cpp/tcp_echo_photon
-    run "photon-uring " cpp/tcp_echo_photon --uring
-
-    section "tcp_echo: 1 conn x 100k msgs x 4096B (round $((i + 1)))"
-    P="--conns=1 --msgs=100000 --size=4096"
-    run "zio-st-stdio " $B/tcp_echo --zio $P
-    run "zio-st-native" $B/tcp_echo_native --zio $P
-    run "go           " $B/tcp_echo_go -conns=1 -msgs=100000 -size=4096
-    run "tokio        " $R/tcp_echo $P
-    run "asio-st      " cpp/tcp_echo_asio --st $P
-    run "photon       " cpp/tcp_echo_photon $P
-
     section "queue_ping_pong (round $((i + 1)))"
     run "zio-st-stdio " $B/queue_ping_pong --zio
     run "zio-mt-stdio " $B/queue_ping_pong --zio-mt

@@ -22,7 +22,7 @@ pub fn build(b: *std.Build) void {
         "short_sleep",
         "long_sleep",
         "queue_ping_pong",
-        "tcp_echo",
+        "tcp_server",
         "worker_pool",
         "cpu_parallel",
     };
@@ -35,13 +35,12 @@ pub fn build(b: *std.Build) void {
         "task_chain",
         "spawn_tree",
         "fanout_cpu",
-        "zio_echo_server",
+        "tcp_server_native",
         "condition_bench_native",
         "rwlock_bench_native",
         "worker_pool_native",
         "yield_bench",
         "spawn_bench",
-        "tcp_echo_native",
     };
 
     for (benchmarks) |name| {

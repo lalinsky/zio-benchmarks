@@ -330,10 +330,15 @@ def parse_throughput(text):
 
 
 def ensure_driver(quiet):
-    """Build the Go load driver if missing or stale."""
+    """Build the Go load driver if missing or stale. On a shipped tree the
+    source isn't present — then the prebuilt binary is used as-is."""
     src = TCP_DRIVER + ".go"
-    if os.path.exists(TCP_DRIVER) and os.path.getmtime(TCP_DRIVER) >= os.path.getmtime(src):
+    have_bin, have_src = os.path.exists(TCP_DRIVER), os.path.exists(src)
+    if have_bin and (not have_src or os.path.getmtime(TCP_DRIVER) >= os.path.getmtime(src)):
         return
+    if not have_src:
+        print(f"tcp driver binary missing and no source at {src}", file=sys.stderr)
+        sys.exit(1)
     cmd = f"go build -o {TCP_DRIVER} {src}"
     if not quiet:
         print(f"building: {cmd}", file=sys.stderr, flush=True)

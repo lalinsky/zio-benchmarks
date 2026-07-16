@@ -226,6 +226,14 @@ def run_one(engine, params):
     return parse_ms(out.stdout + out.stderr)
 
 
+def med_dev(vals):
+    """(median, standard deviation) for a cell, or None if it never ran.
+    Deviation is 0 with a single sample."""
+    if not vals:
+        return None
+    return (statistics.median(vals), statistics.stdev(vals) if len(vals) > 1 else 0.0)
+
+
 def run_matrix(bench, rounds, quiet=False):
     """Interleaved: every cell once per round, then take medians."""
     def progress(msg):
@@ -249,7 +257,7 @@ def run_matrix(bench, rounds, quiet=False):
     medians = {}
     for e in bench.engines:
         medians[e.label] = None if not built[e.label] else {
-            c: (statistics.median(samples[(e.label, c)]) if samples[(e.label, c)] else None)
+            c: med_dev(samples[(e.label, c)])
             for c in bench.cases
         }
     return medians
@@ -266,7 +274,7 @@ def emit_table(title, mode, engines, cases, medians):
             if row is None:
                 cells = ["_not built_"] * len(cols)
             else:
-                cells = [("n/a" if row[c] is None else f"{row[c]:.2f}") for c in cols]
+                cells = [("n/a" if row[c] is None else f"{row[c][0]:.2f} ±{row[c][1]:.2f}") for c in cols]
             print(f"| {e.label} | " + " | ".join(cells) + " |")
         elif e.solo:  # exists only in the other mode — show struck-out for completeness
             print(f"| ~~{e.label}~~ | " + " | ".join(["—"] * len(cols)) + " |")
@@ -274,7 +282,7 @@ def emit_table(title, mode, engines, cases, medians):
 
 def emit(bench, rounds, tasks, quiet=False):
     medians = run_matrix(bench, rounds, quiet)
-    print(f"\n## {bench.name} (median of {rounds} rounds, ms)")
+    print(f"\n## {bench.name} (median ±stdev of {rounds} rounds, ms)")
     modes = [e.mode for e in bench.engines]
     if "st" in modes:
         emit_table("Single-threaded", "st", bench.engines, bench.cases, medians)
@@ -378,22 +386,25 @@ def tcp_run_matrix(servers, rounds, quiet):
 
     return {
         s.label: (None if not built[s.label] else {
-            sc[0]: (statistics.median(samples[(s.label, sc[0])]) if samples[(s.label, sc[0])] else None)
+            sc[0]: med_dev(samples[(s.label, sc[0])])
             for sc in _TCP_SCENARIOS
         })
         for s in servers
     }
 
 
-def _fmt_thru(v, unit):
-    if v is None:
+def _fmt_thru(pair, unit):
+    if pair is None:
         return "n/a"
-    return f"{v / 1000:.0f}k" if unit == "msgs/s" else f"{v:.2f}"
+    m, d = pair
+    if unit == "msgs/s":
+        return f"{m / 1000:.0f}k ±{d / 1000:.0f}k"
+    return f"{m:.2f} ±{d:.2f}"
 
 
 def tcp_emit(servers, rounds, quiet=False):
     medians = tcp_run_matrix(servers, rounds, quiet)
-    print(f"\n## tcp (median of {rounds} rounds, higher is better)")
+    print(f"\n## tcp (median ±stdev of {rounds} rounds, higher is better)")
     for title, unit in (("echo (msgs/s)", "msgs/s"), ("bulk transfer (GB/s)", "GB/s")):
         cols = [sc for sc in _TCP_SCENARIOS if sc[3] == unit]
         labels = [c[0] for c in cols]

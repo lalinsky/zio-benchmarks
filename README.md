@@ -1,34 +1,35 @@
 # zio benchmarks
 
-Cross-runtime benchmarks for [zio](https://github.com/lalinsky/zio), with
-counterparts for Go, tokio, Asio and PhotonLibOS where it makes sense.
+Cross-runtime benchmarks for [zio](https://github.com/lalinsky/zio), with Go,
+tokio, Asio and PhotonLibOS counterparts wherever a comparison makes sense.
 
-zio always appears as separate engines: `--zio` (single-threaded) and
-`--zio-mt` (multi-threaded) are different schedulers with different
-trade-offs, and most benchmarks also exist in two API flavors — via `std.Io`
-(comparable with `--threaded`, i.e. `std.Io.Threaded`) and via zio's native
-API (`*_native`).
+zio shows up as two separate engines. `--zio` is single-threaded and `--zio-mt`
+is multi-threaded; they're different schedulers with different trade-offs, so I
+keep them apart. Most benchmarks also come in two API flavors: one through
+`std.Io` (which lines up with `--threaded`, i.e. `std.Io.Threaded`) and one
+through zio's native API (`*_native`).
 
 ## Benchmark results
 
 Measured on a bare-metal **Intel Xeon E-2176G** (6 cores / 12 threads,
 3.7–4.7 GHz, 12 MiB L3, 62 GiB RAM), Ubuntu 24.04, kernel 6.8, glibc 2.39,
-`performance` governor. Median **±stdev** over 9 interleaved rounds
-(`./bench.py --bench all --rounds 9`). Lower is better for the millisecond
-benchmarks; higher for tcp. Engine and case definitions are under
-[Golden benchmarks](#golden-benchmarks).
+`performance` governor. Numbers are the median **±stdev** over 9 interleaved
+rounds (`./bench.py --bench all --rounds 9`). Lower is better for the millisecond
+benchmarks, higher for tcp. See [Golden benchmarks](#golden-benchmarks) for what
+the engines and cases mean.
 
 ### sleep — spawn/teardown and timer pressure
 
 `spawn` (0ms) is pure spawn/teardown: tasks finish immediately, so their stacks
-free up and can be reused right away. zio leans into that — clearing a completed
-task and repurposing its stack on a single executor is cheaper than migrating
-it, so single-threaded (~2 ms) beats the multi-threaded work-stealing path.
+free up and get reused right away. That plays to zio's strengths. Clearing a
+finished task and reusing its stack on one executor is cheaper than migrating it,
+so the single-threaded run (~2 ms) actually beats the multi-threaded
+work-stealing path.
 
-`sleep` (10ms) instead keeps all 10k tasks alive concurrently, so nothing
-recycles — every task needs its own live stack, and zio `mmap`s each one
-separately, which is what costs here. Bulk-preallocating stacks up front
-(planned, and useful for server workloads too) should close the gap.
+`sleep` (10ms) keeps all 10k tasks alive at once, so nothing gets recycled. Every
+task needs its own live stack, and zio `mmap`s each one separately, which is
+where the time goes. Preallocating stacks in bulk up front (planned, and handy
+for server workloads too) should close the gap.
 
 Single-threaded (ms):
 
@@ -54,16 +55,17 @@ Multi-threaded (ms):
 
 ### queue_ping_pong — wake-latency chains
 
-`1 pair` is a single two-task chain with one message in flight — pure wake
-latency and context-switch cost. `100 pairs` runs 100 chains concurrently over
-the same total messages, so it also stresses scheduling many wake chains (and
-parallelism on `-mt`).
+`1 pair` is a single two-task chain with one message in flight, so it measures
+pure wake latency and context-switch cost. `100 pairs` runs 100 chains at once
+over the same total number of messages, which adds the cost of scheduling many
+wake chains (and gives `-mt` something to parallelize).
 
-zio is strong in both: its optimized stackful coroutines context-switch tightly,
-with minimal scheduler overhead. The split also shows the channel implementation
-matters once the runtime is fast — zio's native `Channel` runs ~2× the generic
-`std.Io.Queue` (`*-native` vs `*-stdio`), a gap that disappears under
-`std.Io.Threaded`, where thread wake time dominates.
+zio does well on both. The stackful coroutines context-switch tightly and
+there's very little scheduler overhead on top. The split also shows how much the
+channel implementation matters once the runtime itself is fast: zio's native
+`Channel` is roughly 2× faster than the generic `std.Io.Queue` (`*-native` vs
+`*-stdio`). That gap vanishes under `std.Io.Threaded`, where thread wake time
+swamps everything else.
 
 Single-threaded (ms):
 
@@ -89,12 +91,11 @@ Multi-threaded (ms):
 
 ### worker_pool — one shared queue
 
-Producers push items through a single shared queue to consumers, each doing
-per-item work; an order-independent checksum confirms every runtime processes
-the same set. `fan_in` is 1000 producers → 1 consumer, `fan_out` is 1 → 1000.
-The light variants push many tiny items (queue/scheduling bound); the `-cpu`
-variants use fewer, heavier items so per-item compute dominates rather than
-queue speed.
+Producers push items through one shared queue to consumers, each doing a bit of
+work per item. An order-independent checksum confirms every runtime processed the
+same set. `fan_in` is 1000 producers → 1 consumer, `fan_out` is 1 → 1000. The
+light variants push many tiny items so the queue and scheduling dominate; the
+`-cpu` variants use fewer, heavier items so per-item compute dominates instead.
 
 Single-threaded (ms):
 
@@ -120,13 +121,13 @@ Multi-threaded (ms):
 
 ### tcp — server under test
 
-The server under test is driven by the Go load driver over loopback, no core
+The server under test is driven by the Go load driver over loopback, with no core
 pinning. `echo` bounces messages back: `lat` (1 conn, round-trip), `many`
 (1000 conns), `pipe` (64 conns, 16 in flight). `send`/`recv` stream bulk data to
-a sink / from a source over 1 or 8 connections. The throughput scenarios
-(`many`, `pipe`, `send8`, `recv8`) benefit from multi-threading — more
+a sink or from a source over 1 or 8 connections. The throughput scenarios
+(`many`, `pipe`, `send8`, `recv8`) get faster with more threads since the
 connections spread across cores; the single-connection latency scenarios (`lat`,
-`send1`, `recv1`) do not.
+`send1`, `recv1`) don't.
 
 echo (msgs/s):
 
@@ -166,17 +167,17 @@ zig build -Doptimize=ReleaseFast -Dbench=NAME  # just one benchmark
 (cd cpp && ./setup-asio.sh && ./setup-photon.sh && ./build.sh)   # asio + photon, see cpp/README.md
 ```
 
-Plain `zig build` produces Debug binaries — never benchmark those.
+Plain `zig build` produces Debug binaries. Don't benchmark those.
 
 ## Golden benchmarks
 
-The in-process set is run by `./bench.py` (below); TCP is separate (a driver
-process — see "TCP benchmarks"). Every benchmark runs across the same engines
-and reports one result column per case.
+The in-process set is run by `./bench.py` (below). TCP is separate, since it needs
+a driver process (see "TCP benchmarks"). Every benchmark runs across the same
+engines and reports one result column per case.
 
 ### Engines
 
-Each runtime appears as single- and multi-threaded rows; `bench.py` groups them
+Each runtime appears as single- and multi-threaded rows, which `bench.py` groups
 into a single-threaded and a multi-threaded table.
 
 | engine | runtime |
@@ -203,12 +204,13 @@ into a single-threaded and a multi-threaded table.
 | **tcp** — echo | `lat` / `many` / `pipe` | 1-conn round-trip latency / 1000-conn spread / 64-conn pipelined echo throughput |
 | **tcp** — sink/source | `send1`,`send8` / `recv1`,`recv8` | bulk one-way throughput over 1 / 8 connections |
 
-Notes on comparability: **queue_ping_pong** splits a fixed total of 100k
-messages across `--pairs`, so `1 pair` and `100 pairs` do equal total work. The
-`-cpu` **worker_pool** cases use fewer but heavier items (same total hashing) so
-per-item compute — not queue speed — dominates; an order-independent xor
-checksum verifies every runtime agrees on the work done. **sleep** tasks bump a
-shared atomic counter the driver checks against `--tasks`.
+A few notes on keeping the cases comparable. **queue_ping_pong** splits a fixed
+total of 100k messages across `--pairs`, so `1 pair` and `100 pairs` do the same
+total work. The `-cpu` **worker_pool** cases use fewer but heavier items (same
+total hashing) so per-item compute dominates instead of queue speed, and an
+order-independent xor checksum verifies every runtime agrees on the work done.
+**sleep** tasks bump a shared atomic counter that the driver checks against
+`--tasks`.
 
 ### Running
 
@@ -221,7 +223,7 @@ shared atomic counter the driver checks against `--tasks`.
 
 `bench.py` interleaves the cells across `--rounds` and reports the median in ms,
 split into single- and multi-threaded tables (engines with no counterpart in a
-mode, e.g. photon, render struck-out). `--quiet` prints tables only; running it
+mode, like photon, are struck out). `--quiet` prints tables only, and running it
 with no arguments prints help.
 
 ## TCP benchmarks
@@ -229,26 +231,26 @@ with no arguments prints help.
 TCP is measured with a separate driver process (`driver/tcp_driver.go`, Go, one
 goroutine per connection over the netpoller) so the runtime under test is only
 ever the server side. The Go driver multiplexes thousands of connections over a
-few OS threads, so it stays out of the way at high connection counts — a
-thread-per-connection driver becomes the bottleneck there and flatters or
-distorts the comparison.
+handful of OS threads, so it stays out of the way at high connection counts. A
+thread-per-connection driver would become the bottleneck instead and distort the
+comparison.
 
-Per-runtime servers (`tcp_server` / `tcp_server_native`, `go/tcp_server`,
-`rust/src/bin/tcp_server.rs`, `cpp/tcp_server_{asio,photon}.cpp`) implement
-three modes: `echo` (write back whatever arrives), `sink` (read and discard),
-`source` (write until the client closes). zio's event-loop backend is a
-compile-time choice, so io_uring and epoll are separate binaries and appear as
-separate rows (native API).
+Each runtime has its own server (`tcp_server` / `tcp_server_native`,
+`go/tcp_server`, `rust/src/bin/tcp_server.rs`, `cpp/tcp_server_{asio,photon}.cpp`)
+implementing three modes: `echo` (write back whatever arrives), `sink` (read and
+discard), `source` (write until the client closes). zio picks its event-loop
+backend at compile time, so io_uring and epoll are separate binaries and show up
+as separate rows (native API).
 
-`./bench.py --bench tcp` runs the matrix (one server start per mode, the driver
-run per scenario) and reports throughput, higher-is-better:
+`./bench.py --bench tcp` runs the matrix (one server start per mode, then the
+driver once per scenario) and reports throughput, higher is better:
 
 - `echo` — `lat` (1 conn × 4KB, latency chain), `many` (1000 conns × 64B,
   concurrency), `pipe` (64 conns pipelined ×16, message throughput) → msgs/s
-- `send` — driver streams to a sink server over 1 / 8 conns (server read
-  path) → GB/s
-- `recv` — driver drains a source server over 1 / 8 conns (server write
-  path) → GB/s
+- `send` — driver streams into a sink server over 1 / 8 conns, exercising the
+  server read path → GB/s
+- `recv` — driver drains a source server over 1 / 8 conns, exercising the
+  server write path → GB/s
 
 ## Secondary benchmarks
 

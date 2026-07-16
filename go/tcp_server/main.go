@@ -4,9 +4,12 @@
 //	echo    write back whatever arrives (works with driver pipelining)
 //	sink    read and discard until EOF
 //	source  write zeros until the client closes
+//	http    minimal HTTP/1.1 keep-alive: read a request, write a fixed
+//	        "HelloWorld" response. Drive this one with wrk, not the driver.
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"net"
@@ -14,8 +17,12 @@ import (
 
 const bufSize = 64 * 1024
 
+// Matches the other tcp_server http modes. Go sets TCP_NODELAY by default.
+var httpResponse = []byte("HTTP/1.1 200 Ok\r\nContent-Length: 10\r\nContent-Type: text/plain; charset=utf8\r\n\r\nHelloWorld")
+var crlf = []byte("\r\n\r\n")
+
 var (
-	mode = flag.String("mode", "echo", "echo|sink|source")
+	mode = flag.String("mode", "echo", "echo|sink|source|http")
 	port = flag.Int("port", 18800, "listen port")
 )
 
@@ -44,6 +51,29 @@ func handler(conn net.Conn) {
 			if _, err := conn.Write(buf); err != nil {
 				return
 			}
+		}
+	case "http":
+		// Minimal HTTP/1.1 framing: accumulate bytes and emit one response
+		// per "\r\n\r\n" request terminator, shifting consumed bytes out.
+		end := 0
+		for {
+			for {
+				i := bytes.Index(buf[:end], crlf)
+				if i < 0 {
+					break
+				}
+				consumed := i + 4
+				copy(buf, buf[consumed:end])
+				end -= consumed
+				if _, err := conn.Write(httpResponse); err != nil {
+					return
+				}
+			}
+			n, err := conn.Read(buf[end:])
+			if err != nil {
+				return
+			}
+			end += n
 		}
 	}
 }

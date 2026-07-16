@@ -8,11 +8,15 @@ const zio = @import("zio");
 //   echo    write back whatever arrives (works with driver pipelining)
 //   sink    read and discard until EOF
 //   source  write zeros until the client closes
+//   http    minimal HTTP/1.1 keep-alive: read a request, write a fixed
+//           "HelloWorld" response. Drive this one with wrk, not the driver.
 //
-// usage: tcp_server_native [--zio | --zio-mt] [--mode=echo|sink|source] [--port=N]
+// usage: tcp_server_native [--zio | --zio-mt] [--mode=echo|sink|source|http] [--port=N]
 const buf_size = 64 * 1024;
 
-const Mode = enum { echo, sink, source };
+const http_response = "HTTP/1.1 200 Ok\r\nContent-Length: 10\r\nContent-Type: text/plain; charset=utf8\r\n\r\nHelloWorld";
+
+const Mode = enum { echo, sink, source, http };
 
 fn handler(gpa: std.mem.Allocator, stream: zio.net.Stream, mode: Mode) void {
     defer stream.close();
@@ -37,6 +41,23 @@ fn handler(gpa: std.mem.Allocator, stream: zio.net.Stream, mode: Mode) void {
             @memset(buf, 0);
             while (true) {
                 stream.writeAll(buf, .none) catch return;
+            }
+        },
+        .http => {
+            // Minimal HTTP/1.1 framing: accumulate bytes and emit one response
+            // per "\r\n\r\n" request terminator, shifting consumed bytes out.
+            // Handles partial reads and requests that coalesce into one read.
+            var end: usize = 0;
+            while (true) {
+                while (std.mem.indexOf(u8, buf[0..end], "\r\n\r\n")) |i| {
+                    const consumed = i + 4;
+                    std.mem.copyForwards(u8, buf[0 .. end - consumed], buf[consumed..end]);
+                    end -= consumed;
+                    stream.writeAll(http_response, .none) catch return;
+                }
+                const n = stream.read(buf[end..], .none) catch return;
+                if (n == 0) return;
+                end += n;
             }
         },
     }
@@ -69,12 +90,12 @@ pub fn main(init: std.process.Init.Minimal) !void {
         } else if (std.mem.startsWith(u8, arg, "--port=")) {
             port = try std.fmt.parseUnsigned(u16, arg["--port=".len..], 10);
         } else {
-            std.log.err("usage: tcp_server_native [--zio | --zio-mt] [--mode=echo|sink|source] [--port=N]", .{});
+            std.log.err("usage: tcp_server_native [--zio | --zio-mt] [--mode=echo|sink|source|http] [--port=N]", .{});
             std.process.exit(2);
         }
     }
     if (!have_backend) {
-        std.debug.print("usage: tcp_server_native [--zio | --zio-mt] [--mode=echo|sink|source] [--port=N]\n", .{});
+        std.debug.print("usage: tcp_server_native [--zio | --zio-mt] [--mode=echo|sink|source|http] [--port=N]\n", .{});
         std.process.exit(2);
     }
 

@@ -20,6 +20,7 @@ Examples (no arguments prints this help):
 import argparse
 import os
 import re
+import shutil
 import statistics
 import subprocess
 import sys
@@ -423,13 +424,113 @@ def tcp_emit(servers, rounds, quiet=False):
             print(f"| {s.label} | " + " | ".join(cells) + " |")
 
 
+# --- http: the tcp servers in --mode=http (minimal HTTP/1.1 keep-alive: one
+# canned response per "\r\n\r\n"), driven by wrk. Reports req/s (higher is
+# better), a flat engine x scenario table like tcp. kprotty's hand-rolled epoll
+# server is intentionally excluded (it needs zig 0.9.1 stage1 async).
+HTTP_PORT = 18801
+HTTP_DURATION = os.environ.get("HTTP_DURATION", "3s")
+HTTP_WRK_THREADS = int(os.environ.get("HTTP_WRK_THREADS", max(1, (os.cpu_count() or 2) // 2)))
+HTTP_WRK = shutil.which("wrk") or os.path.join(ROOT, "bin", "wrk")
+
+_HTTP_SERVERS = [
+    Engine("zio-uring-st", "mt", [_URING, "--zio", "--mode=http"]),
+    Engine("zio-uring-mt", "mt", [_URING, "--zio-mt", "--mode=http"]),
+    Engine("zio-epoll-st", "mt", [_EPOLL, "--zio", "--mode=http"]),
+    Engine("zio-epoll-mt", "mt", [_EPOLL, "--zio-mt", "--mode=http"]),
+    Engine("threaded", "mt", [os.path.join(B, "tcp_server"), "--threaded", "--mode=http"]),
+    Engine("go", "mt", [os.path.join(B, "tcp_server_go"), "--mode=http"]),
+    Engine("tokio", "mt", [os.path.join(R, "tcp_server"), "--mode=http"]),
+]
+
+# (label, wrk connection count)
+_HTTP_SCENARIOS = [
+    ("c128", 128),
+    ("c512", 512),
+]
+
+_WRK_RPS = re.compile(r"Requests/sec:\s*([0-9.]+)")
+
+
+def parse_rps(text):
+    m = _WRK_RPS.search(_ANSI.sub("", text))
+    return float(m.group(1)) if m else None
+
+
+def http_run_matrix(servers, rounds, quiet):
+    if not os.path.exists(HTTP_WRK):
+        print(f"[http] wrk not found; put it on PATH or at {os.path.join(ROOT, 'bin', 'wrk')}",
+              file=sys.stderr)
+        sys.exit(1)
+    built = {s.label: os.path.exists(s.bin) for s in servers}
+    missing = [s.label for s in servers if not built[s.label]]
+    if missing and not quiet:
+        print(f"[http] not built, skipped: {', '.join(missing)}", file=sys.stderr)
+
+    samples = {(s.label, sc[0]): [] for s in servers for sc in _HTTP_SCENARIOS}
+    for r in range(1, rounds + 1):
+        for s in servers:
+            if not built[s.label]:
+                continue
+            if not quiet:
+                print(f"[http {r}/{rounds}] {s.label}", file=sys.stderr, flush=True)
+            proc = subprocess.Popen(
+                [*s.argv, f"--port={HTTP_PORT}"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            try:
+                time.sleep(0.7)  # let the server bind
+                for label, conns in _HTTP_SCENARIOS:
+                    out = subprocess.run(
+                        [HTTP_WRK, f"-t{HTTP_WRK_THREADS}", f"-c{conns}",
+                         f"-d{HTTP_DURATION}", f"http://127.0.0.1:{HTTP_PORT}/"],
+                        capture_output=True, text=True,
+                    )
+                    v = parse_rps(out.stdout + out.stderr)
+                    if v is not None:
+                        samples[(s.label, label)].append(v)
+            finally:
+                proc.terminate()
+                proc.wait()
+                time.sleep(0.3)  # let the port free before the next bind
+
+    return {
+        s.label: (None if not built[s.label] else {
+            sc[0]: med_dev(samples[(s.label, sc[0])])
+            for sc in _HTTP_SCENARIOS
+        })
+        for s in servers
+    }
+
+
+def _fmt_rps(pair):
+    if pair is None:
+        return "n/a"
+    m, d = pair
+    return f"{m / 1000:.0f}k ±{d / 1000:.0f}k"
+
+
+def http_emit(servers, rounds, quiet=False):
+    medians = http_run_matrix(servers, rounds, quiet)
+    print(f"\n## http (median ±stdev of {rounds} rounds, req/s, higher is better)")
+    print(f"\nwrk -t{HTTP_WRK_THREADS} -d{HTTP_DURATION}; minimal HTTP/1.1 keep-alive\n")
+    labels = [c[0] for c in _HTTP_SCENARIOS]
+    print("| engine | " + " | ".join(labels) + " |")
+    print("|" + "---|" * (len(labels) + 1))
+    for s in servers:
+        row = medians.get(s.label)
+        cells = (["_not built_"] * len(labels) if row is None
+                 else [_fmt_rps(row[c[0]]) for c in _HTTP_SCENARIOS])
+        print(f"| {s.label} | " + " | ".join(cells) + " |")
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument(
         "--bench",
-        choices=list(BENCHMARKS) + ["tcp", "all"],
+        choices=list(BENCHMARKS) + ["tcp", "http", "all"],
         help="benchmark to run, or 'all' (required — with no args this help is shown)",
     )
     ap.add_argument("--rounds", type=int, default=7, help="rounds per cell (median reported)")
@@ -449,22 +550,25 @@ def main():
         return
 
     excluded = {fam for fam in FAMILIES if getattr(args, f"no_{fam}")}
-    names = (list(BENCHMARKS) + ["tcp"]) if args.bench == "all" else [args.bench]
+    names = (list(BENCHMARKS) + ["tcp", "http"]) if args.bench == "all" else [args.bench]
 
     # Resolve each name to something runnable: an in-process Benchmark, or the
-    # filtered TCP server list.
+    # filtered TCP/HTTP server list.
     runnables = []  # (kind, obj)
     for name in names:
         if name == "tcp":
             servers = [s for s in _TCP_SERVERS if s.label.split("-")[0] not in excluded]
             runnables.append(("tcp", servers))
+        elif name == "http":
+            servers = [s for s in _HTTP_SERVERS if s.label.split("-")[0] not in excluded]
+            runnables.append(("http", servers))
         else:
             runnables.append(("bench", without(BENCHMARKS[name](args.tasks), excluded)))
 
     if args.build:
         engines = []
         for kind, obj in runnables:
-            engines += obj if kind == "tcp" else obj.engines
+            engines += obj if kind in ("tcp", "http") else obj.engines
         run_builds(engines, args.quiet)
         if any(kind == "tcp" for kind, _ in runnables):
             ensure_driver(args.quiet)
@@ -472,6 +576,8 @@ def main():
     for kind, obj in runnables:
         if kind == "tcp":
             tcp_emit(obj, args.rounds, args.quiet)
+        elif kind == "http":
+            http_emit(obj, args.rounds, args.quiet)
         else:
             emit(obj, args.rounds, args.tasks, args.quiet)
 

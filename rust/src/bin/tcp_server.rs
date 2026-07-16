@@ -5,18 +5,24 @@
 //   echo    write back whatever arrives (works with driver pipelining)
 //   sink    read and discard until EOF
 //   source  write zeros until the client closes
+//   http    minimal HTTP/1.1 keep-alive: read a request, write a fixed
+//           "HelloWorld" response. Drive this one with wrk, not the driver.
 //
-// usage: tcp_server [--st] [--mode=echo|sink|source] [--port=N]
+// usage: tcp_server [--st] [--mode=echo|sink|source|http] [--port=N]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 const BUF_SIZE: usize = 64 * 1024;
+
+const HTTP_RESPONSE: &[u8] =
+    b"HTTP/1.1 200 Ok\r\nContent-Length: 10\r\nContent-Type: text/plain; charset=utf8\r\n\r\nHelloWorld";
 
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
     Echo,
     Sink,
     Source,
+    Http,
 }
 
 async fn handler(mut stream: TcpStream, mode: Mode) {
@@ -42,6 +48,25 @@ async fn handler(mut stream: TcpStream, mode: Mode) {
                 return;
             }
         },
+        Mode::Http => {
+            // Minimal HTTP/1.1 framing: accumulate bytes and emit one response
+            // per "\r\n\r\n" request terminator, shifting consumed bytes out.
+            let mut end = 0usize;
+            loop {
+                while let Some(i) = buf[..end].windows(4).position(|w| w == b"\r\n\r\n") {
+                    let consumed = i + 4;
+                    buf.copy_within(consumed..end, 0);
+                    end -= consumed;
+                    if stream.write_all(HTTP_RESPONSE).await.is_err() {
+                        return;
+                    }
+                }
+                match stream.read(&mut buf[end..]).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => end += n,
+                }
+            }
+        }
     }
 }
 
@@ -72,13 +97,14 @@ fn main() {
                 "echo" => Mode::Echo,
                 "sink" => Mode::Sink,
                 "source" => Mode::Source,
+                "http" => Mode::Http,
                 _ => {
                     eprintln!("unknown mode '{}'", v);
                     std::process::exit(2);
                 }
             };
         } else {
-            eprintln!("usage: tcp_server [--st] [--mode=echo|sink|source] [--port=N]");
+            eprintln!("usage: tcp_server [--st] [--mode=echo|sink|source|http] [--port=N]");
             std::process::exit(2);
         }
     }

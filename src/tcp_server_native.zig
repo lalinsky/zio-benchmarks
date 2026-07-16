@@ -1,7 +1,7 @@
 const std = @import("std");
 const zio = @import("zio");
 
-// TCP benchmark subject (native zio API), driven by driver/tcp_driver.c.
+// TCP benchmark subject (native zio API), driven by driver/tcp_driver.go.
 // Accepts connections forever (the bench runner kills the process); one task
 // per connection. Modes:
 //

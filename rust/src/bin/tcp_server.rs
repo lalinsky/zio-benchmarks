@@ -1,4 +1,4 @@
-// TCP benchmark subject on tokio, driven by driver/tcp_driver.c. Accepts
+// TCP benchmark subject on tokio, driven by driver/tcp_driver.go. Accepts
 // connections forever (the bench runner kills the process); one task per
 // connection.
 //

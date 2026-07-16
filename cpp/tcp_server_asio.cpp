@@ -1,5 +1,5 @@
 // TCP benchmark subject on standalone Asio + C++20 coroutines, driven by
-// driver/tcp_driver.c. Accepts connections forever (the bench runner kills
+// driver/tcp_driver.go. Accepts connections forever (the bench runner kills
 // the process); one coroutine per connection. io_context run by
 // hardware_concurrency threads (--st for one).
 //

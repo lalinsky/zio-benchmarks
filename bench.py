@@ -23,6 +23,7 @@ import re
 import statistics
 import subprocess
 import sys
+import time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 B = os.path.join(ROOT, "zig-out", "bin")       # zig + go binaries
@@ -31,6 +32,7 @@ CPP = os.path.join(ROOT, "cpp")
 
 UNIT_MS = {"s": 1e3, "ms": 1.0, "us": 1e-3, "µs": 1e-3, "ns": 1e-6}
 _DUR = re.compile(r"Duration:\s*([0-9.]+)\s*(µs|us|ns|ms|s)\b")
+_THRU = re.compile(r"([0-9.]+)\s*(msgs/s|GB/s)")
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
@@ -74,6 +76,11 @@ def build_command(engine):
     if b.startswith(B):  # zig-out/bin: zig benches, plus go's *_go
         if base.endswith("_go"):
             return f"cd go && go build -o ../zig-out/bin/{base} ./{base[:-3]}"
+        # backend-tagged zig binary, e.g. tcp_server_native_epoll
+        for be in ("io_uring", "epoll", "poll"):
+            if base.endswith("_" + be):
+                bench = base[: -(len(be) + 1)]
+                return f"zig build -Doptimize=ReleaseFast -Dbench={bench} -Dbackend={be}"
         return f"zig build -Doptimize=ReleaseFast -Dbench={base}"
     if b.startswith(R):
         return f"cd rust && cargo build --release --bin {base}"
@@ -82,14 +89,13 @@ def build_command(engine):
     return None
 
 
-def run_builds(benchmarks, quiet):
-    """Rebuild every binary the given benchmarks need (deduped), in order."""
+def run_builds(engines, quiet):
+    """Rebuild every binary the given engines need (deduped), in order."""
     cmds = []
-    for bench in benchmarks:
-        for e in bench.engines:
-            c = build_command(e)
-            if c and c not in cmds:
-                cmds.append(c)
+    for e in engines:
+        c = build_command(e)
+        if c and c not in cmds:
+            cmds.append(c)
     for cmd in cmds:
         if not quiet:
             print(f"building: {cmd}", file=sys.stderr, flush=True)
@@ -276,13 +282,138 @@ def emit(bench, rounds, tasks, quiet=False):
         emit_table("Multi-threaded", "mt", bench.engines, bench.cases, medians)
 
 
+# --- tcp: a server process under test driven by the C driver process (no core
+# pinning). The driver reports throughput (msgs/s for echo, GB/s for send/recv),
+# so higher is better; results are a flat engine x scenario table, not st/mt.
+TCP_DRIVER = os.path.join(ROOT, "driver", "tcp_driver")
+TCP_PORT = 18800
+
+# zio's event-loop backend is a compile-time choice, so io_uring and epoll are
+# separate binaries (tcp_server_native_<backend>); native API only.
+_URING = os.path.join(B, "tcp_server_native_io_uring")
+_EPOLL = os.path.join(B, "tcp_server_native_epoll")
+_TCP_SERVERS = [
+    Engine("zio-uring-st", "mt", [_URING, "--zio"]),
+    Engine("zio-uring-mt", "mt", [_URING, "--zio-mt"]),
+    Engine("zio-epoll-st", "mt", [_EPOLL, "--zio"]),
+    Engine("zio-epoll-mt", "mt", [_EPOLL, "--zio-mt"]),
+    Engine("go", "mt", [os.path.join(B, "tcp_server_go")]),
+    Engine("tokio", "mt", [os.path.join(R, "tcp_server")]),
+    Engine("asio", "mt", [os.path.join(CPP, "tcp_server_asio")]),
+    Engine("photon", "mt", [os.path.join(CPP, "tcp_server_photon")]),
+    Engine("photon-uring", "mt", [os.path.join(CPP, "tcp_server_photon"), "--uring"]),
+]
+
+# (label, server --mode, driver args, unit). Server modes: echo / sink / source.
+_TCP_SCENARIOS = [
+    ("lat", "echo", ["--mode=echo", "--conns=1", "--msgs=100000", "--size=4096"], "msgs/s"),
+    ("many", "echo", ["--mode=echo", "--conns=1000", "--msgs=100", "--size=64"], "msgs/s"),
+    ("pipe", "echo", ["--mode=echo", "--conns=64", "--msgs=10000", "--size=64", "--pipeline=16"], "msgs/s"),
+    ("send1", "sink", ["--mode=send", "--mb=8192", "--size=65536", "--conns=1"], "GB/s"),
+    ("send8", "sink", ["--mode=send", "--mb=8192", "--size=65536", "--conns=8"], "GB/s"),
+    ("recv1", "source", ["--mode=recv", "--mb=8192", "--size=65536", "--conns=1"], "GB/s"),
+    ("recv8", "source", ["--mode=recv", "--mb=8192", "--size=65536", "--conns=8"], "GB/s"),
+]
+
+
+def parse_throughput(text):
+    m = _THRU.search(_ANSI.sub("", text))
+    return float(m.group(1)) if m else None
+
+
+def ensure_driver(quiet):
+    """Build the Go load driver if missing or stale."""
+    src = TCP_DRIVER + ".go"
+    if os.path.exists(TCP_DRIVER) and os.path.getmtime(TCP_DRIVER) >= os.path.getmtime(src):
+        return
+    cmd = f"go build -o {TCP_DRIVER} {src}"
+    if not quiet:
+        print(f"building: {cmd}", file=sys.stderr, flush=True)
+    if subprocess.run(cmd, shell=True, cwd=ROOT, stdout=sys.stderr).returncode != 0:
+        print("build failed: tcp driver", file=sys.stderr)
+        sys.exit(1)
+
+
+def tcp_run_matrix(servers, rounds, quiet):
+    ensure_driver(quiet)
+    built = {s.label: os.path.exists(s.bin) for s in servers}
+    missing = [s.label for s in servers if not built[s.label]]
+    if missing and not quiet:
+        print(f"[tcp] not built, skipped: {', '.join(missing)}", file=sys.stderr)
+
+    # Group scenarios by server mode (preserving order) so one server start
+    # serves all of its scenarios.
+    by_mode = []
+    for sc in _TCP_SCENARIOS:
+        if not by_mode or by_mode[-1][0] != sc[1]:
+            by_mode.append((sc[1], []))
+        by_mode[-1][1].append(sc)
+
+    samples = {(s.label, sc[0]): [] for s in servers for sc in _TCP_SCENARIOS}
+    for r in range(1, rounds + 1):
+        for s in servers:
+            if not built[s.label]:
+                continue
+            for mode, scs in by_mode:
+                if not quiet:
+                    print(f"[tcp {r}/{rounds}] {s.label} {mode}", file=sys.stderr, flush=True)
+                proc = subprocess.Popen(
+                    [*s.argv, f"--mode={mode}", f"--port={TCP_PORT}"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+                try:
+                    time.sleep(0.5)  # let the server bind
+                    for label, _m, dargs, _u in scs:
+                        out = subprocess.run(
+                            [TCP_DRIVER, f"--port={TCP_PORT}", *dargs],
+                            capture_output=True, text=True,
+                        )
+                        v = parse_throughput(out.stdout + out.stderr)
+                        if v is not None:
+                            samples[(s.label, label)].append(v)
+                finally:
+                    proc.terminate()
+                    proc.wait()
+                    time.sleep(0.3)  # let the port free before the next bind
+
+    return {
+        s.label: (None if not built[s.label] else {
+            sc[0]: (statistics.median(samples[(s.label, sc[0])]) if samples[(s.label, sc[0])] else None)
+            for sc in _TCP_SCENARIOS
+        })
+        for s in servers
+    }
+
+
+def _fmt_thru(v, unit):
+    if v is None:
+        return "n/a"
+    return f"{v / 1000:.0f}k" if unit == "msgs/s" else f"{v:.2f}"
+
+
+def tcp_emit(servers, rounds, quiet=False):
+    medians = tcp_run_matrix(servers, rounds, quiet)
+    print(f"\n## tcp (median of {rounds} rounds, higher is better)")
+    for title, unit in (("echo (msgs/s)", "msgs/s"), ("bulk transfer (GB/s)", "GB/s")):
+        cols = [sc for sc in _TCP_SCENARIOS if sc[3] == unit]
+        labels = [c[0] for c in cols]
+        print(f"\n### {title}\n")
+        print("| engine | " + " | ".join(labels) + " |")
+        print("|" + "---|" * (len(labels) + 1))
+        for s in servers:
+            row = medians.get(s.label)
+            cells = (["_not built_"] * len(labels) if row is None
+                     else [_fmt_thru(row[c[0]], unit) for c in cols])
+            print(f"| {s.label} | " + " | ".join(cells) + " |")
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument(
         "--bench",
-        choices=list(BENCHMARKS) + ["all"],
+        choices=list(BENCHMARKS) + ["tcp", "all"],
         help="benchmark to run, or 'all' (required — with no args this help is shown)",
     )
     ap.add_argument("--rounds", type=int, default=7, help="rounds per cell (median reported)")
@@ -302,14 +433,31 @@ def main():
         return
 
     excluded = {fam for fam in FAMILIES if getattr(args, f"no_{fam}")}
-    names = list(BENCHMARKS) if args.bench == "all" else [args.bench]
-    benches = [without(BENCHMARKS[name](args.tasks), excluded) for name in names]
+    names = (list(BENCHMARKS) + ["tcp"]) if args.bench == "all" else [args.bench]
+
+    # Resolve each name to something runnable: an in-process Benchmark, or the
+    # filtered TCP server list.
+    runnables = []  # (kind, obj)
+    for name in names:
+        if name == "tcp":
+            servers = [s for s in _TCP_SERVERS if s.label.split("-")[0] not in excluded]
+            runnables.append(("tcp", servers))
+        else:
+            runnables.append(("bench", without(BENCHMARKS[name](args.tasks), excluded)))
 
     if args.build:
-        run_builds(benches, args.quiet)
+        engines = []
+        for kind, obj in runnables:
+            engines += obj if kind == "tcp" else obj.engines
+        run_builds(engines, args.quiet)
+        if any(kind == "tcp" for kind, _ in runnables):
+            ensure_driver(args.quiet)
 
-    for bench in benches:
-        emit(bench, args.rounds, args.tasks, args.quiet)
+    for kind, obj in runnables:
+        if kind == "tcp":
+            tcp_emit(obj, args.rounds, args.quiet)
+        else:
+            emit(obj, args.rounds, args.tasks, args.quiet)
 
 
 if __name__ == "__main__":

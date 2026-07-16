@@ -1,4 +1,4 @@
-// TCP benchmark subject, driven by driver/tcp_driver.c. Accepts connections
+// TCP benchmark subject, driven by driver/tcp_driver.go. Accepts connections
 // forever (the bench runner kills the process); one goroutine per connection.
 //
 //	echo    write back whatever arrives (works with driver pipelining)

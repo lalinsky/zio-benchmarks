@@ -1,4 +1,4 @@
-// TCP benchmark subject on PhotonLibOS, driven by driver/tcp_driver.c.
+// TCP benchmark subject on PhotonLibOS, driven by driver/tcp_driver.go.
 // Accepts connections forever (the bench runner kills the process); one
 // coroutine per connection, all on a single vcpu (photon's intended
 // shared-nothing configuration).

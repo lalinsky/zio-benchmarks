@@ -44,7 +44,7 @@ pub fn build(b: *std.Build) void {
 
     for (benchmarks) |name| {
         if (only) |o| if (!std.mem.eql(u8, name, o)) continue;
-        addZigBenchmark(b, target, optimize, zio, name);
+        addZigBenchmark(b, target, optimize, zio, name, backend);
     }
 
     // Variants that swap std.Io.Queue for xsync.Queue (same generic queue,
@@ -80,9 +80,13 @@ fn addZigBenchmark(
     optimize: std.builtin.OptimizeMode,
     zio: *std.Build.Module,
     name: []const u8,
+    backend: ?[]const u8,
 ) void {
+    // Tag the binary with the backend when one is pinned, so io_uring and epoll
+    // builds of the same benchmark can coexist (e.g. tcp_server_native_epoll).
+    const exe_name = if (backend) |be| b.fmt("{s}_{s}", .{ name, be }) else name;
     const exe = b.addExecutable(.{
-        .name = name,
+        .name = exe_name,
         .root_module = b.createModule(.{
             .root_source_file = b.path(b.fmt("src/{s}.zig", .{name})),
             .target = target,

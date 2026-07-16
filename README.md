@@ -79,24 +79,29 @@ with no arguments prints help.
 
 ## TCP benchmarks
 
-TCP is measured with a separate driver process (`driver/tcp_driver.c`, plain
-C, one blocking thread per connection) so the runtime under test is only ever
-the server side, and in-process task placement can't skew the comparison.
-Driver and server are pinned to disjoint core sets.
+TCP is measured with a separate driver process (`driver/tcp_driver.go`, Go, one
+goroutine per connection over the netpoller) so the runtime under test is only
+ever the server side. The Go driver multiplexes thousands of connections over a
+few OS threads, so it stays out of the way at high connection counts — a
+thread-per-connection driver becomes the bottleneck there and flatters or
+distorts the comparison.
 
 Per-runtime servers (`tcp_server` / `tcp_server_native`, `go/tcp_server`,
 `rust/src/bin/tcp_server.rs`, `cpp/tcp_server_{asio,photon}.cpp`) implement
 three modes: `echo` (write back whatever arrives), `sink` (read and discard),
-`source` (write until the client closes).
+`source` (write until the client closes). zio's event-loop backend is a
+compile-time choice, so io_uring and epoll are separate binaries and appear as
+separate rows (native API).
 
-`./tcp_bench.sh` runs the full matrix:
+`./bench.py --bench tcp` runs the matrix (one server start per mode, the driver
+run per scenario) and reports throughput, higher-is-better:
 
-- `echo` — 1 conn × 4KB (latency chain), 1000 conns × 64B (concurrency),
-  64 conns pipelined ×16 (message throughput)
-- `send` — driver streams to a sink server, 1 and 8 connections (server read
-  path, GB/s)
-- `recv` — driver drains a source server, 1 and 8 connections (server write
-  path, GB/s)
+- `echo` — `lat` (1 conn × 4KB, latency chain), `many` (1000 conns × 64B,
+  concurrency), `pipe` (64 conns pipelined ×16, message throughput) → msgs/s
+- `send` — driver streams to a sink server over 1 / 8 conns (server read
+  path) → GB/s
+- `recv` — driver drains a source server over 1 / 8 conns (server write
+  path) → GB/s
 
 ## Secondary benchmarks
 

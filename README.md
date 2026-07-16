@@ -16,34 +16,66 @@ zig build -Doptimize=ReleaseFast               # zig binaries
 zig build -Doptimize=ReleaseFast -Dbench=NAME  # just one benchmark
 ./build_go.sh                                  # go counterparts
 (cd rust && cargo build --release)             # tokio counterparts
-(cd cpp && ./build.sh <asio> <photon>)         # asio + photon, see cpp/README.md
+(cd cpp && ./setup-asio.sh && ./setup-photon.sh && ./build.sh)   # asio + photon, see cpp/README.md
 ```
 
 Plain `zig build` produces Debug binaries — never benchmark those.
 
 ## Golden benchmarks
 
-The primary set, each with go / tokio / photon / zio-std.Io / zio-native
-implementations and stable parameters:
+The in-process set is run by `./bench.py` (below); TCP is separate (a driver
+process — see "TCP benchmarks"). Every benchmark runs across the same engines
+and reports one result column per case.
 
-- **tcp** — see "TCP benchmarks" below; driver/server split across processes
-- **queue_ping_pong** — 100k messages bounced between two tasks over two
-  capacity-1 queues: the wake-latency chain
-- **worker_pool** — `--num-producers` push `--num-items` into one shared queue
-  drained by `--num-consumers` doing `--work` hash iterations per item; an
-  order-independent checksum verifies all runtimes agree. Presets: defaults
-  (1 → 1000 fan-out), `--num-producers=1000 --num-consumers=1 --work=0`
-  (fan-in)
-- **sleep** — `--tasks` concurrent tasks each sleeping `--sleep-ms`, std.Io and
-  native variants. Two cases: `--sleep-ms=0` (pure no-op spawn storm) and
-  `--sleep-ms=10` (10k tasks kept alive + timer pressure). Each task bumps a
-  shared atomic counter that the driver verifies against `--tasks`.
+### Engines
 
-`./bench.py --bench all` runs the in-process golden set interleaved across every
-runtime that is built, emitting median markdown tables split by single- and
-multi-threaded (engines with no counterpart in a mode, e.g. photon, show
-struck-out there). `--rounds N` for more rounds, `--quiet` for tables only; run
-`./bench.py` with no arguments for help.
+Each runtime appears as single- and multi-threaded rows; `bench.py` groups them
+into a single-threaded and a multi-threaded table.
+
+| engine | runtime |
+|---|---|
+| `zio-st-stdio`, `zio-mt-stdio` | zio via `std.Io` (comparable with `--threaded`) |
+| `zio-st-native`, `zio-mt-native` | zio's native API |
+| `tokio-st`, `tokio-mt` | tokio `current_thread` / `multi_thread` |
+| `asio-st`, `asio-mt` | Asio `thread_pool` sized 1 / `hardware_concurrency` |
+| `go-st`, `go-mt` | Go with `GOMAXPROCS=1` / default |
+| `photon` | PhotonLibOS — single-vcpu only, so no multi-threaded row |
+
+### Benchmarks and cases
+
+| benchmark | case | what it measures |
+|---|---|---|
+| **queue_ping_pong** | `1 pair` | one two-task wake-latency chain, a single message in flight |
+| | `100 pairs` | 100 independent chains sharing the same total messages — scheduling many concurrent wake-chains (parallelizes on mt) |
+| **worker_pool** | `fan_in` | 1000 producers → 1 consumer, 100k tiny items — many-to-one queue + wakeups |
+| | `fan_out` | 1 producer → 1000 consumers, 100k tiny items — one-to-many queue + scheduling |
+| | `fan_in-cpu` | fan-in with 10k heavy items (`--work=10000`) — serial consumer compute |
+| | `fan_out-cpu` | fan-out with 10k heavy items — parallel consumer compute (mt should scale) |
+| **sleep** | `spawn (0ms)` | 10k no-op tasks — pure spawn/teardown throughput |
+| | `sleep (10ms)` | 10k tasks kept alive 10 ms — spawn + liveness + timer pressure |
+| **tcp** — echo | `lat` / `many` / `pipe` | 1-conn round-trip latency / 1000-conn spread / 64-conn pipelined echo throughput |
+| **tcp** — sink/source | `send1`,`send8` / `recv1`,`recv8` | bulk one-way throughput over 1 / 8 connections |
+
+Notes on comparability: **queue_ping_pong** splits a fixed total of 100k
+messages across `--pairs`, so `1 pair` and `100 pairs` do equal total work. The
+`-cpu` **worker_pool** cases use fewer but heavier items (same total hashing) so
+per-item compute — not queue speed — dominates; an order-independent xor
+checksum verifies every runtime agrees on the work done. **sleep** tasks bump a
+shared atomic counter the driver checks against `--tasks`.
+
+### Running
+
+```
+./bench.py --bench all                    # every benchmark, both tables
+./bench.py --bench worker_pool --build    # rebuild that benchmark's binaries first
+./bench.py --bench sleep --rounds 11      # more rounds
+./bench.py --bench queue_ping_pong --no-photon --no-asio   # skip runtimes
+```
+
+`bench.py` interleaves the cells across `--rounds` and reports the median in ms,
+split into single- and multi-threaded tables (engines with no counterpart in a
+mode, e.g. photon, render struck-out). `--quiet` prints tables only; running it
+with no arguments prints help.
 
 ## TCP benchmarks
 

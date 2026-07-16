@@ -18,23 +18,17 @@ Measured on a bare-metal **Intel Xeon E-2176G** (6 cores / 12 threads,
 benchmarks; higher for tcp. Engine and case definitions are under
 [Golden benchmarks](#golden-benchmarks).
 
-The `±stdev` is more than an error bar: on multi-threaded work it also reflects
-each runtime's own scheduling nondeterminism (work-stealing, task placement) — a
-property of the runtime, not the machine. Compare tokio's wide `worker_pool`
-spread to zio's and Go's tight one on the same box.
-
-**Go is the most balanced runtime here** — competitive across every benchmark,
-tight deviations, no real weak spot. zio leads on connection concurrency and
-sits in the top cluster on TCP; tokio takes pipelined echo and single-pair
-latency but has the least deterministic scheduler; Asio falls behind under
-fan-out contention; PhotonLibOS (single vcpu) is strong on pipelined echo and
-weak on many-connection or parallel work.
-
 ### sleep — spawn/teardown and timer pressure
 
-zio has the fastest single-thread spawn (~2 ms) but pays for stackful coroutines
-on the multi-threaded and kept-alive (`sleep 10ms`) cases; Go's multi-threaded
-spawn (2.8 ms) is untouched.
+`spawn` (0ms) is pure spawn/teardown: tasks finish immediately, so their stacks
+free up and can be reused right away. zio leans into that — clearing a completed
+task and repurposing its stack on a single executor is cheaper than migrating
+it, so single-threaded (~2 ms) beats the multi-threaded work-stealing path.
+
+`sleep` (10ms) instead keeps all 10k tasks alive concurrently, so nothing
+recycles — every task needs its own live stack, and zio `mmap`s each one
+separately, which is what costs here. Bulk-preallocating stacks up front
+(planned, and useful for server workloads too) should close the gap.
 
 Single-threaded (ms):
 
@@ -60,10 +54,16 @@ Multi-threaded (ms):
 
 ### queue_ping_pong — wake-latency chains
 
-One pair is pure round-trip latency (everyone clusters ~13–27 ms mt). At 100
-concurrent pairs the multi-threaded runtimes spread the chains: **zio-mt-native
-is fastest at 1.69 ms**, ahead of tokio (2.15) and Go (3.43) — zio's scheduler
-shines on connection concurrency.
+`1 pair` is a single two-task chain with one message in flight — pure wake
+latency and context-switch cost. `100 pairs` runs 100 chains concurrently over
+the same total messages, so it also stresses scheduling many wake chains (and
+parallelism on `-mt`).
+
+zio is strong in both: its optimized stackful coroutines context-switch tightly,
+with minimal scheduler overhead. The split also shows the channel implementation
+matters once the runtime is fast — zio's native `Channel` runs ~2× the generic
+`std.Io.Queue` (`*-native` vs `*-stdio`), a gap that disappears under
+`std.Io.Threaded`, where thread wake time dominates.
 
 Single-threaded (ms):
 
@@ -89,10 +89,12 @@ Multi-threaded (ms):
 
 ### worker_pool — one shared queue
 
-The `-cpu` variants use fewer, heavier items so per-item compute (not queue
-speed) dominates. On the CPU-bound fan-out, Go (14.1 ms) and tokio (16.2) edge
-zio (18.6); on the queue-bound light variants zio and Go pull far ahead of
-tokio/asio. tokio's wide deviations here are its work-stealing, not the box.
+Producers push items through a single shared queue to consumers, each doing
+per-item work; an order-independent checksum confirms every runtime processes
+the same set. `fan_in` is 1000 producers → 1 consumer, `fan_out` is 1 → 1000.
+The light variants push many tiny items (queue/scheduling bound); the `-cpu`
+variants use fewer, heavier items so per-item compute dominates rather than
+queue speed.
 
 Single-threaded (ms):
 
@@ -118,11 +120,13 @@ Multi-threaded (ms):
 
 ### tcp — server under test
 
-Loopback, driven by the Go netpoller driver, no core pinning. zio leads
-**echo-many (425k msgs/s)** and is in the top cluster on bulk (16–17 GB/s);
-tokio takes **echo-pipe (940k)** and edges recv8. For zio the **io_uring vs
-epoll** split earns its keep: io_uring wins many-small-connection echo, epoll
-wins bulk send8 (17.6 vs 14.2 GB/s) on this box.
+The server under test is driven by the Go load driver over loopback, no core
+pinning. `echo` bounces messages back: `lat` (1 conn, round-trip), `many`
+(1000 conns), `pipe` (64 conns, 16 in flight). `send`/`recv` stream bulk data to
+a sink / from a source over 1 or 8 connections. The throughput scenarios
+(`many`, `pipe`, `send8`, `recv8`) benefit from multi-threading — more
+connections spread across cores; the single-connection latency scenarios (`lat`,
+`send1`, `recv1`) do not.
 
 echo (msgs/s):
 

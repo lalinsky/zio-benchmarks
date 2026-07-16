@@ -9,6 +9,149 @@ trade-offs, and most benchmarks also exist in two API flavors — via `std.Io`
 (comparable with `--threaded`, i.e. `std.Io.Threaded`) and via zio's native
 API (`*_native`).
 
+## Benchmark results
+
+Measured on a bare-metal **Intel Xeon E-2176G** (6 cores / 12 threads,
+3.7–4.7 GHz, 12 MiB L3, 62 GiB RAM), Ubuntu 24.04, kernel 6.8, glibc 2.39,
+`performance` governor. Median **±stdev** over 9 interleaved rounds
+(`./bench.py --bench all --rounds 9`). Lower is better for the millisecond
+benchmarks; higher for tcp. Engine and case definitions are under
+[Golden benchmarks](#golden-benchmarks).
+
+The `±stdev` is more than an error bar: on multi-threaded work it also reflects
+each runtime's own scheduling nondeterminism (work-stealing, task placement) — a
+property of the runtime, not the machine. Compare tokio's wide `worker_pool`
+spread to zio's and Go's tight one on the same box.
+
+**Go is the most balanced runtime here** — competitive across every benchmark,
+tight deviations, no real weak spot. zio leads on connection concurrency and
+sits in the top cluster on TCP; tokio takes pipelined echo and single-pair
+latency but has the least deterministic scheduler; Asio falls behind under
+fan-out contention; PhotonLibOS (single vcpu) is strong on pipelined echo and
+weak on many-connection or parallel work.
+
+### sleep — spawn/teardown and timer pressure
+
+zio has the fastest single-thread spawn (~2 ms) but pays for stackful coroutines
+on the multi-threaded and kept-alive (`sleep 10ms`) cases; Go's multi-threaded
+spawn (2.8 ms) is untouched.
+
+Single-threaded (ms):
+
+| engine | spawn (0ms) | sleep (10ms) |
+|---|---|---|
+| zio-st-stdio | 2.09 ±0.17 | 53.76 ±1.86 |
+| zio-st-native | 2.00 ±0.15 | 54.80 ±1.24 |
+| tokio-st | 4.57 ±0.37 | 17.36 ±1.33 |
+| asio-st | 10.10 ±1.37 | 17.44 ±1.21 |
+| go-st | 16.10 ±0.53 | 28.61 ±1.21 |
+| photon | 89.68 ±4.04 | 100.22 ±3.47 |
+
+Multi-threaded (ms):
+
+| engine | spawn (0ms) | sleep (10ms) |
+|---|---|---|
+| zio-mt-stdio | 17.86 ±1.10 | 62.96 ±1.98 |
+| zio-mt-native | 18.29 ±1.11 | 61.41 ±3.19 |
+| tokio-mt | 5.88 ±0.94 | 16.83 ±0.47 |
+| asio-mt | 27.30 ±1.15 | 52.11 ±0.75 |
+| go-mt | 2.81 ±0.14 | 25.09 ±0.46 |
+| ~~photon~~ | — | — |
+
+### queue_ping_pong — wake-latency chains
+
+One pair is pure round-trip latency (everyone clusters ~13–27 ms mt). At 100
+concurrent pairs the multi-threaded runtimes spread the chains: **zio-mt-native
+is fastest at 1.69 ms**, ahead of tokio (2.15) and Go (3.43) — zio's scheduler
+shines on connection concurrency.
+
+Single-threaded (ms):
+
+| engine | 1 pair | 100 pairs |
+|---|---|---|
+| zio-st-stdio | 14.13 ±0.23 | 19.36 ±0.29 |
+| zio-st-native | 7.56 ±0.70 | 10.63 ±0.39 |
+| tokio-st | 17.37 ±1.49 | 17.05 ±0.44 |
+| asio-st | 52.40 ±2.80 | 58.03 ±2.73 |
+| go-st | 19.35 ±0.64 | 19.18 ±0.73 |
+| photon | 410.12 ±12.60 | 23.48 ±3.36 |
+
+Multi-threaded (ms):
+
+| engine | 1 pair | 100 pairs |
+|---|---|---|
+| zio-mt-stdio | 26.96 ±0.63 | 2.76 ±0.32 |
+| zio-mt-native | 13.22 ±0.28 | 1.69 ±0.07 |
+| tokio-mt | 27.28 ±1.98 | 2.15 ±0.15 |
+| asio-mt | 580.97 ±12.56 | 116.47 ±0.63 |
+| go-mt | 17.16 ±1.31 | 3.43 ±0.23 |
+| ~~photon~~ | — | — |
+
+### worker_pool — one shared queue
+
+The `-cpu` variants use fewer, heavier items so per-item compute (not queue
+speed) dominates. On the CPU-bound fan-out, Go (14.1 ms) and tokio (16.2) edge
+zio (18.6); on the queue-bound light variants zio and Go pull far ahead of
+tokio/asio. tokio's wide deviations here are its work-stealing, not the box.
+
+Single-threaded (ms):
+
+| engine | fan_in | fan_out | fan_in-cpu | fan_out-cpu |
+|---|---|---|---|---|
+| zio-st-stdio | 3.93 ±0.22 | 16.61 ±0.48 | 94.42 ±0.64 | 101.89 ±1.67 |
+| zio-st-native | 3.83 ±0.06 | 13.09 ±0.78 | 94.78 ±1.01 | 101.55 ±1.09 |
+| tokio-st | 26.20 ±5.09 | 27.54 ±5.38 | 95.70 ±1.40 | 96.94 ±1.40 |
+| asio-st | 53.39 ±1.97 | 53.52 ±4.34 | 100.81 ±1.06 | 102.75 ±1.70 |
+| go-st | 6.51 ±0.82 | 5.79 ±0.11 | 96.58 ±2.12 | 95.51 ±7.44 |
+| photon | 32.88 ±2.39 | 47.41 ±5.62 | 105.64 ±1.44 | 107.82 ±1.95 |
+
+Multi-threaded (ms):
+
+| engine | fan_in | fan_out | fan_in-cpu | fan_out-cpu |
+|---|---|---|---|---|
+| zio-mt-stdio | 67.18 ±2.37 | 68.65 ±1.04 | 106.32 ±3.16 | 19.12 ±0.86 |
+| zio-mt-native | 38.98 ±2.11 | 47.44 ±1.17 | 106.01 ±2.81 | 18.62 ±0.47 |
+| tokio-mt | 113.17 ±11.70 | 116.50 ±8.81 | 106.49 ±1.35 | 16.18 ±0.79 |
+| asio-mt | 608.94 ±25.66 | 604.01 ±21.92 | 146.69 ±0.45 | 75.92 ±3.10 |
+| go-mt | 38.22 ±0.72 | 38.83 ±0.58 | 98.05 ±5.51 | 14.11 ±0.84 |
+| ~~photon~~ | — | — | — | — |
+
+### tcp — server under test
+
+Loopback, driven by the Go netpoller driver, no core pinning. zio leads
+**echo-many (425k msgs/s)** and is in the top cluster on bulk (16–17 GB/s);
+tokio takes **echo-pipe (940k)** and edges recv8. For zio the **io_uring vs
+epoll** split earns its keep: io_uring wins many-small-connection echo, epoll
+wins bulk send8 (17.6 vs 14.2 GB/s) on this box.
+
+echo (msgs/s):
+
+| engine | lat | many | pipe |
+|---|---|---|---|
+| zio-uring-st | 43k ±1k | 127k ±2k | 818k ±10k |
+| zio-uring-mt | 44k ±1k | 425k ±23k | 773k ±29k |
+| zio-epoll-st | 43k ±1k | 103k ±3k | 520k ±11k |
+| zio-epoll-mt | 42k ±1k | 378k ±14k | 696k ±21k |
+| go | 41k ±1k | 393k ±13k | 668k ±18k |
+| tokio | 43k ±1k | 421k ±21k | 940k ±49k |
+| asio | 35k ±1k | 373k ±14k | 846k ±17k |
+| photon | 44k ±1k | 84k ±3k | 691k ±5k |
+| photon-uring | 44k ±1k | 107k ±3k | 733k ±6k |
+
+bulk transfer (GB/s):
+
+| engine | send1 | send8 | recv1 | recv8 |
+|---|---|---|---|---|
+| zio-uring-st | 4.32 ±0.13 | 5.78 ±0.08 | 3.94 ±0.06 | 4.25 ±0.10 |
+| zio-uring-mt | 4.38 ±0.07 | 14.17 ±0.22 | 3.80 ±0.09 | 16.13 ±0.34 |
+| zio-epoll-st | 4.32 ±0.08 | 5.79 ±0.10 | 4.03 ±0.06 | 4.06 ±0.09 |
+| zio-epoll-mt | 4.23 ±0.11 | 17.64 ±1.69 | 4.02 ±0.06 | 16.53 ±0.50 |
+| go | 4.33 ±0.10 | 15.15 ±0.51 | 4.40 ±0.08 | 15.05 ±0.49 |
+| tokio | 4.30 ±0.09 | 16.65 ±0.96 | 4.05 ±0.05 | 17.12 ±0.81 |
+| asio | 3.73 ±0.21 | 13.34 ±0.27 | 3.67 ±0.06 | 14.81 ±0.35 |
+| photon | 4.37 ±0.07 | 7.75 ±0.33 | 4.09 ±0.08 | 4.07 ±0.10 |
+| photon-uring | 4.38 ±0.06 | 7.57 ±0.37 | 4.08 ±0.09 | 4.09 ±0.04 |
+
 ## Building
 
 ```

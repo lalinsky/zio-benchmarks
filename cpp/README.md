@@ -1,38 +1,49 @@
 # C++ benchmark counterparts (Asio, PhotonLibOS)
 
-These are not built by `zig build`; they need the two libraries fetched and
-built once, then `./build.sh <asio-dir> <photon-dir>`.
+These are not built by `zig build`, and the two libraries are **not vendored**.
+Prepare each one into `cpp/libs/` (git-ignored) with its setup script, then
+build the benchmarks:
+
+```sh
+./setup-asio.sh      # downloads standalone Asio  -> libs/asio
+./setup-photon.sh    # clones + builds PhotonLibOS -> libs/photon
+./build.sh           # builds the *_asio and *_photon binaries
+```
+
+Run the setup scripts once; re-running is cheap (asio is skipped if already
+present). Both scripts and `build.sh` are directory-independent — they operate
+relative to `cpp/`.
 
 ## Asio (standalone, header-only)
 
+`./setup-asio.sh` downloads a pinned release and unpacks the headers to
+`libs/asio/asio/include`. Pin a different version with:
+
 ```sh
-curl -LO https://github.com/chriskohlhoff/asio/archive/refs/tags/asio-1-30-2.tar.gz
-tar xf asio-1-30-2.tar.gz
-# headers in asio-asio-1-30-2/asio/include
+ASIO_VERSION=1-38-1 ./setup-asio.sh
 ```
 
 ## PhotonLibOS
 
-Requires `liburing-dev` at runtime kernel >= 5.8 for `--uring`; the vendored
-build also compiles its own OpenSSL/libaio/liburing.
+`./setup-photon.sh` clones PhotonLibOS to `libs/photon` and builds it (Release,
+`PHOTON_BUILD_DEPENDENCIES=ON`, so it compiles its own OpenSSL/libaio/liburing).
+Needs `cmake` and a C++ toolchain; `--uring` needs kernel >= 5.8 at runtime.
+Pin a ref (tag/branch/commit) with:
 
 ```sh
-git clone https://github.com/alibaba/PhotonLibOS photon
-cd photon
-cmake -B build -D CMAKE_BUILD_TYPE=Release -D PHOTON_BUILD_TESTING=OFF \
-      -D PHOTON_ENABLE_LIBCURL=OFF -D PHOTON_ENABLE_URING=ON \
-      -D PHOTON_BUILD_DEPENDENCIES=ON \
-      -D CMAKE_CXX_FLAGS="-Wno-error=unused-value"
-cmake --build build -j$(nproc)
+PHOTON_REF=<tag> ./setup-photon.sh
 ```
 
-## Building the benchmarks
+## Building
+
+`./build.sh` reads the deps from `libs/` by default; pass explicit paths to
+override:
 
 ```sh
-./build.sh /path/to/asio-asio-1-30-2 /path/to/photon
+./build.sh /path/to/asio-dir /path/to/photon-dir
 ```
 
 Photon benches run everything on a single vcpu — its intended shared-nothing
 configuration; cross-vcpu synchronization is its slow path and would dominate
-otherwise. `tcp_echo_photon` takes `--uring` to use the io_uring event engine
-instead of epoll.
+otherwise. The photon TCP server takes `--uring` to use the io_uring event
+engine instead of epoll.

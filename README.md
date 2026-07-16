@@ -34,12 +34,16 @@ implementations and stable parameters:
   order-independent checksum verifies all runtimes agree. Presets: defaults
   (1 → 1000 fan-out), `--num-producers=1000 --num-consumers=1 --work=0`
   (fan-in)
-- **sleep_bench** — `--tasks` concurrent tasks each sleeping `--sleep-ms`.
-  Presets: defaults (10k × 1ms, spawn storm + timer pressure),
-  `--sleep-ms=0` (pure no-op spawn benchmark)
+- **sleep** — `--tasks` concurrent tasks each sleeping `--sleep-ms`, std.Io and
+  native variants. Two cases: `--sleep-ms=0` (pure no-op spawn storm) and
+  `--sleep-ms=10` (10k tasks kept alive + timer pressure). Each task bumps a
+  shared atomic counter that the driver verifies against `--tasks`.
 
-`./golden.sh` runs the in-process golden set interleaved across every runtime
-that is built (`N=5 ./golden.sh` for more rounds).
+`./bench.py --bench all` runs the in-process golden set interleaved across every
+runtime that is built, emitting median markdown tables split by single- and
+multi-threaded (engines with no counterpart in a mode, e.g. photon, show
+struck-out there). `--rounds N` for more rounds, `--quiet` for tables only; run
+`./bench.py` with no arguments for help.
 
 ## TCP benchmarks
 
@@ -68,7 +72,7 @@ With a Go counterpart (`./run.sh NAME` compares all backends): `cpu_parallel`.
 
 Zig-only (run directly with `--zio` / `--zio-mt`):
 
-- `queue_ping_pong_native`, `worker_pool_native` — native-API golden variants
+- `queue_ping_pong_native`, `worker_pool_native`, `sleep_native` — native-API golden variants
 - `queue_ping_pong_futex` — channel built directly on `std.Io` futex
   primitives (also `--threaded`)
 - `task_chain` — chain of tasks, each spawning the next: spawn/teardown path
@@ -76,7 +80,6 @@ Zig-only (run directly with `--zio` / `--zio-mt`):
 - `fanout_cpu` — single producer feeding CPU-heavy consumers: work stealing
 - `yield_bench` — two tasks yielding in a loop (scheduler switch cost);
   `--solo` for the empty-queue yield fast path
-- `spawn_bench` — 100k no-op task spawns
 - `mutex_bench_native`, `condition_bench_native`, `rwlock_bench_native` —
   sync primitive microbenchmarks
 

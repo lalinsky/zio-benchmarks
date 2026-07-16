@@ -7,10 +7,11 @@ const IoBackend = @import("utils.zig").IoBackend;
 //   defaults (10000 tasks x 1ms)   spawn storm + timer pressure
 //   --sleep-ms=0                   pure no-op spawn benchmark (no timers)
 //   --sleep-ms=1000                many long sleeps (timer capacity)
-fn sleepTask(io: std.Io, sleep_ms: u64) !void {
+fn sleepTask(io: std.Io, sleep_ms: u64, counter: *std.atomic.Value(u64)) !void {
     if (sleep_ms > 0) {
         try std.Io.sleep(io, std.Io.Duration.fromMilliseconds(@intCast(sleep_ms)), .awake);
     }
+    _ = counter.fetchAdd(1, .monotonic);
 }
 
 pub fn main(init: std.process.Init.Minimal) !void {
@@ -37,7 +38,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
             &sleep_ms
         else {
             std.log.err("unknown argument '{s}'", .{arg});
-            std.log.err("usage: sleep_bench [--zio | --zio-mt | --threaded] [--tasks=N] [--sleep-ms=N]", .{});
+            std.log.err("usage: sleep [--zio | --zio-mt | --threaded] [--tasks=N] [--sleep-ms=N]", .{});
             std.process.exit(1);
         };
         const value = if (split_pos < arg.len) arg[split_pos + 1 ..] else blk: {
@@ -57,17 +58,27 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
     const io = backend.io();
 
+    var counter: std.atomic.Value(u64) = .init(0);
+
     const start_time: std.Io.Clock.Timestamp = .now(io, .real);
 
     var group: std.Io.Group = .init;
     defer group.cancel(io);
 
     for (0..num_tasks) |_| {
-        try group.concurrent(io, sleepTask, .{ io, sleep_ms });
+        try group.concurrent(io, sleepTask, .{ io, sleep_ms, &counter });
     }
     try group.await(io);
 
     const end_time = std.Io.Clock.Timestamp.now(io, .real);
     const duration = start_time.durationTo(end_time);
+
+    // Proof that every task ran (survives ReleaseFast, unlike an assert).
+    const ran = counter.load(.monotonic);
+    if (ran != num_tasks) {
+        std.log.err("only {d}/{d} tasks completed", .{ ran, num_tasks });
+        std.process.exit(3);
+    }
+
     std.log.info("Duration: {f} ({d} tasks, sleep {d}ms)", .{ duration.raw, num_tasks, sleep_ms });
 }

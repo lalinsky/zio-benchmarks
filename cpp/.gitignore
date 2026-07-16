@@ -1,6 +1,12 @@
+# Downloaded/built dependencies (see setup-asio.sh / setup-photon.sh)
+libs/
+
+# Built benchmark binaries
 queue_ping_pong_asio
 queue_ping_pong_photon
 tcp_server_asio
 tcp_server_photon
+worker_pool_asio
 worker_pool_photon
-sleep_bench_photon
+sleep_asio
+sleep_photon

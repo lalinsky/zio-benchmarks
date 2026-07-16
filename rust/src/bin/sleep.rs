@@ -3,13 +3,17 @@
 // benchmark.
 use std::time::{Duration, Instant};
 
-fn parse_args() -> (usize, u64) {
-    let (mut tasks, mut sleep_ms) = (10_000usize, 1u64);
+fn parse_args() -> (usize, u64, bool) {
+    let (mut tasks, mut sleep_ms, mut st) = (10_000usize, 1u64, false);
     for arg in std::env::args().skip(1) {
+        if arg == "--st" {
+            st = true;
+            continue;
+        }
         let (key, value) = match arg.split_once('=') {
             Some(kv) => kv,
             None => {
-                eprintln!("usage: sleep_bench [--tasks=N] [--sleep-ms=N]");
+                eprintln!("usage: sleep [--st] [--tasks=N] [--sleep-ms=N]");
                 std::process::exit(1);
             }
         };
@@ -22,7 +26,7 @@ fn parse_args() -> (usize, u64) {
             }
         }
     }
-    (tasks, sleep_ms)
+    (tasks, sleep_ms, st)
 }
 
 async fn run(tasks: usize, sleep_ms: u64) {
@@ -40,11 +44,13 @@ async fn run(tasks: usize, sleep_ms: u64) {
 }
 
 fn main() {
-    let (tasks, sleep_ms) = parse_args();
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap();
+    let (tasks, sleep_ms, st) = parse_args();
+    let mut builder = if st {
+        tokio::runtime::Builder::new_current_thread()
+    } else {
+        tokio::runtime::Builder::new_multi_thread()
+    };
+    let rt = builder.enable_all().build().unwrap();
     let start = Instant::now();
     rt.block_on(run(tasks, sleep_ms));
     let d = start.elapsed();

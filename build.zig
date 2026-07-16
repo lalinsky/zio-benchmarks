@@ -4,8 +4,13 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const only = b.option([]const u8, "bench", "Build only the named benchmark");
+    const backend = b.option([]const u8, "backend", "zio event loop backend (io_uring, epoll, poll, ...)");
 
-    const zio_dep = b.dependency("zio", .{
+    const zio_dep = if (backend) |be| b.dependency("zio", .{
+        .target = target,
+        .optimize = optimize,
+        .backend = be,
+    }) else b.dependency("zio", .{
         .target = target,
         .optimize = optimize,
     });
@@ -19,7 +24,7 @@ pub fn build(b: *std.Build) void {
 
     // Go counterparts build separately with ./build_go.sh.
     const benchmarks = [_][]const u8{
-        "sleep_bench",
+        "sleep",
         "queue_ping_pong",
         "tcp_server",
         "worker_pool",
@@ -34,7 +39,7 @@ pub fn build(b: *std.Build) void {
         "rwlock_bench_native",
         "worker_pool_native",
         "yield_bench",
-        "spawn_bench",
+        "sleep_native",
     };
 
     for (benchmarks) |name| {

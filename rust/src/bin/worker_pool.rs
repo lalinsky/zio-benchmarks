@@ -37,13 +37,18 @@ async fn consumer(rx: async_channel::Receiver<u64>, work_iters: u64) -> u64 {
     acc
 }
 
-fn parse_args() -> (u64, u64, u64, u64) {
-    let (mut items, mut producers, mut consumers, mut work_iters) = (100_000u64, 1u64, 1000u64, 64u64);
+fn parse_args() -> (u64, u64, u64, u64, bool) {
+    let (mut items, mut producers, mut consumers, mut work_iters, mut st) =
+        (100_000u64, 1u64, 1000u64, 64u64, false);
     for arg in std::env::args().skip(1) {
+        if arg == "--st" {
+            st = true;
+            continue;
+        }
         let (key, value) = match arg.split_once('=') {
             Some(kv) => kv,
             None => {
-                eprintln!("usage: worker_pool [--num-items=N] [--num-producers=N] [--num-consumers=N] [--work=N]");
+                eprintln!("usage: worker_pool [--st] [--num-items=N] [--num-producers=N] [--num-consumers=N] [--work=N]");
                 std::process::exit(1);
             }
         };
@@ -59,7 +64,7 @@ fn parse_args() -> (u64, u64, u64, u64) {
         };
         *target = value.parse().expect("invalid number");
     }
-    (items, producers, consumers, work_iters)
+    (items, producers, consumers, work_iters, st)
 }
 
 async fn run(items: u64, producers: u64, consumers: u64, work_iters: u64) -> u64 {
@@ -90,11 +95,13 @@ async fn run(items: u64, producers: u64, consumers: u64, work_iters: u64) -> u64
 }
 
 fn main() {
-    let (items, producers, consumers, work_iters) = parse_args();
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap();
+    let (items, producers, consumers, work_iters, st) = parse_args();
+    let mut builder = if st {
+        tokio::runtime::Builder::new_current_thread()
+    } else {
+        tokio::runtime::Builder::new_multi_thread()
+    };
+    let rt = builder.enable_all().build().unwrap();
     let start = Instant::now();
     let checksum = rt.block_on(run(items, producers, consumers, work_iters));
     let d = start.elapsed();

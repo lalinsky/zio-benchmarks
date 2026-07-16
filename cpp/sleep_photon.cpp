@@ -28,7 +28,7 @@ int main(int argc, char** argv) {
         if (!strncmp(argv[i], "--tasks=", 8)) { target = &g_tasks; value = argv[i] + 8; }
         else if (!strncmp(argv[i], "--sleep-ms=", 11)) { target = &g_sleep_ms; value = argv[i] + 11; }
         else {
-            fprintf(stderr, "usage: sleep_bench_photon [--tasks=N] [--sleep-ms=N]\n");
+            fprintf(stderr, "usage: sleep_photon [--tasks=N] [--sleep-ms=N]\n");
             return 2;
         }
         *target = strtoull(value, nullptr, 10);
